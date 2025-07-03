@@ -333,7 +333,7 @@ async def spotify(ctx, member: discord.Member = None):
 async def on_ready():
     await bot.tree.sync()
     print(f"{bot.user} is online and commands synced!")
-
+# THis is a test comment
 
     
 
