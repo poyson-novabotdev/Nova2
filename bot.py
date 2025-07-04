@@ -3,6 +3,8 @@ from discord.ext import commands
 import json
 import random
 from datetime import datetime, timedelta, timezone
+import os
+from dotenv import load_dotenv
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -337,4 +339,13 @@ async def on_ready():
 
     
 
-bot.run("TOKEN")
+# Load environment variables
+load_dotenv()
+
+# Get token from environment variable
+TOKEN = os.getenv("TOKEN")
+if not TOKEN:
+    print("Error: TOKEN not found in .env file")
+    exit(1)
+
+bot.run(TOKEN)
