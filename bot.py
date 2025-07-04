@@ -10,6 +10,7 @@ from discord import app_commands
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.presences = True
 
 bot = commands.Bot(command_prefix="?", intents=intents, help_command=None)
 
@@ -497,7 +498,7 @@ async def reactionroles_slash(interaction: discord.Interaction):
 async def nicki_slash(interaction: discord.Interaction):
     lyrics = [
         "lIKE mJ dOCTOR, tHEY kILLIN mE. pROPOFOl, i kNOW tHEY hOPE i fALL.bUT tELL eM wINNIN iS mY mUTHUFUCKIN pROTOCOL..",
-        "mE, nICKI m, i gOT tOO mANY m'S!!!",
+        "mE, nICKI m, i gOT tOO mANY wINS!!!",
         "aYO tONIGHT iS tHE nIGHT tHAT iMMMA gET tWISTED, mYX mOSCATO n vODKA iMA mIX iT.",
         "yOUR fLOW iS sUCH a bORE...",
         "aND i wILL rETIRE wITH tHE cROWN... yES!",
@@ -528,6 +529,12 @@ async def leaderboard_slash(interaction: discord.Interaction):
 @app_commands.describe(member="The member to check (optional)")
 async def spotify_slash(interaction: discord.Interaction, member: discord.Member = None):
     member = member or interaction.user
+    # Get the full member object from the guild
+    if interaction.guild:
+        member = interaction.guild.get_member(member.id)
+    if not member:
+        await interaction.response.send_message("Could not find that member.", ephemeral=True)
+        return
     for activity in member.activities:
         if isinstance(activity, discord.Spotify):
             embed = discord.Embed(
