@@ -15,17 +15,17 @@ bot = commands.Bot(command_prefix="?", intents=intents, help_command=None)
 CURRENCY_NAME = "dOLLARIANAS"
 DATA_FILE = "balances.json"
 XP_FILE = "xp.json"
+CONFIG_FILE = "config.json"
 
 balances = {}
 user_xp = {}
+config = {}
 
 beg_cooldowns = {}
 work_cooldowns = {}
 daily_cooldowns = {}
 
 OWNER_ID = 755846396208218174
-MOD_ROLE_NAME = "mODIANA"
-ADMIN_ROLE_NAME = "kAREN"
 
 ROLE_MESSAGE_ID = None
 EMOJI_TO_ROLE = {
@@ -35,6 +35,18 @@ EMOJI_TO_ROLE = {
 }
 
 # --- Helper functions ---
+def load_config():
+    global config
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            config = json.load(f)
+    except FileNotFoundError:
+        config = {"mod_role_id": None, "admin_role_id": None}
+
+def save_config():
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f)
+
 def load_balances():
     global balances
     try:
@@ -84,12 +96,20 @@ def get_level(user_id):
     return user_xp.get(str(user_id), {"xp": 0, "level": 1})
 
 def has_mod_or_admin(ctx):
-    roles = [role.name for role in ctx.author.roles]
-    return MOD_ROLE_NAME in roles or ADMIN_ROLE_NAME in roles or ctx.author.id == OWNER_ID
+    if ctx.author.id == OWNER_ID:
+        return True
+    
+    mod_role_id = config.get("mod_role_id")
+    admin_role_id = config.get("admin_role_id")
+    
+    user_role_ids = [role.id for role in ctx.author.roles]
+    
+    return (mod_role_id and mod_role_id in user_role_ids) or (admin_role_id and admin_role_id in user_role_ids)
 
 # --- Events ---
 @bot.event
 async def on_ready():
+    load_config()
     load_balances()
     load_xp()
     print(f"{bot.user} is online and ready!")
@@ -140,6 +160,68 @@ async def on_raw_reaction_remove(payload):
 # --- Commands ---
 
 @bot.command()
+async def setmodrole(ctx, role_input):
+    """Set the moderator role by ID or mention"""
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("Only the bot owner can use this command.")
+        return
+    
+    # Try to parse role from mention or ID
+    role = None
+    
+    # Check if it's a role mention
+    if role_input.startswith('<@&') and role_input.endswith('>'):
+        role_id = int(role_input[3:-1])
+        role = ctx.guild.get_role(role_id)
+    else:
+        # Try to parse as role ID
+        try:
+            role_id = int(role_input)
+            role = ctx.guild.get_role(role_id)
+        except ValueError:
+            await ctx.send("Invalid role ID or mention format.")
+            return
+    
+    if not role:
+        await ctx.send("Role not found.")
+        return
+    
+    config["mod_role_id"] = role.id
+    save_config()
+    await ctx.send(f"Moderator role set to {role.name} (ID: {role.id})")
+
+@bot.command()
+async def setadminrole(ctx, role_input):
+    """Set the admin role by ID or mention"""
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("Only the bot owner can use this command.")
+        return
+    
+    # Try to parse role from mention or ID
+    role = None
+    
+    # Check if it's a role mention
+    if role_input.startswith('<@&') and role_input.endswith('>'):
+        role_id = int(role_input[3:-1])
+        role = ctx.guild.get_role(role_id)
+    else:
+        # Try to parse as role ID
+        try:
+            role_id = int(role_input)
+            role = ctx.guild.get_role(role_id)
+        except ValueError:
+            await ctx.send("Invalid role ID or mention format.")
+            return
+    
+    if not role:
+        await ctx.send("Role not found.")
+        return
+    
+    config["admin_role_id"] = role.id
+    save_config()
+    await ctx.send(f"Admin role set to {role.name} (ID: {role.id})")
+
+@bot.command()
 async def help(ctx):
     help_text = """
 commands available:
@@ -154,6 +236,9 @@ commands available:
 ?kick @user [reason] - kick a member (mods only)
 ?ban @user [reason] - ban a member (mods only)
 ?clear [amount] - delete messages (mods only)
+
+?setmodrole <role_id or @role> - set moderator role (owner only)
+?setadminrole <role_id or @role> - set admin role (owner only)
 
 ?reactionroles - post gender role selection message
 ?nicki - get a random Nicki Minaj lyric
