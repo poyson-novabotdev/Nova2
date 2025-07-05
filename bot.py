@@ -1,3 +1,6 @@
+# =========================
+# Imports and Setup
+# =========================
 import discord
 from discord.ext import commands
 import json
@@ -7,6 +10,9 @@ import os
 from dotenv import load_dotenv
 from discord import app_commands
 
+# =========================
+# Intents and Bot Instance
+# =========================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -14,20 +20,23 @@ intents.presences = True
 
 bot = commands.Bot(command_prefix="?", intents=intents, help_command=None)
 
+# =========================
+# Constants and Globals
+# =========================
 CURRENCY_NAME = "dOLLARIANAS"
 DATA_FILE = "balances.json"
 XP_FILE = "xp.json"
+CONFIG_FILE = "config.json"
 
 balances = {}
 user_xp = {}
+config = {}
 
 beg_cooldowns = {}
 work_cooldowns = {}
 daily_cooldowns = {}
 
 OWNER_ID = 755846396208218174
-MOD_ROLE_NAME = "mODIANA"
-ADMIN_ROLE_NAME = "kAREN"
 
 ROLE_MESSAGE_ID = None
 EMOJI_TO_ROLE = {
@@ -36,8 +45,26 @@ EMOJI_TO_ROLE = {
     "🤍": "oTHER (AKS)"
 }
 
-# --- Helper functions ---
+# =========================
+# Helper Functions
+# =========================
+
+def load_config():
+    """Load configuration from CONFIG_FILE into the global config dict."""
+    global config
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            config = json.load(f)
+    except FileNotFoundError:
+        config = {"mod_role_id": None, "admin_role_id": None}
+
+def save_config():
+    """Save the current config dict to CONFIG_FILE."""
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f)
+
 def load_balances():
+    """Load user balances from DATA_FILE into the global balances dict."""
     global balances
     try:
         with open(DATA_FILE, "r") as f:
@@ -46,13 +73,16 @@ def load_balances():
         balances = {}
 
 def save_balances():
+    """Save the current balances dict to DATA_FILE."""
     with open(DATA_FILE, "w") as f:
         json.dump(balances, f)
 
 def get_balance(user_id):
+    """Get the balance for a user by their ID."""
     return balances.get(str(user_id), 0)
 
 def change_balance(user_id, amount):
+    """Change a user's balance by a given amount. Prevents negative balances."""
     user_id = str(user_id)
     balances[user_id] = balances.get(user_id, 0) + amount
     if balances[user_id] < 0:
@@ -60,6 +90,7 @@ def change_balance(user_id, amount):
     save_balances()
 
 def load_xp():
+    """Load user XP data from XP_FILE into the global user_xp dict."""
     global user_xp
     try:
         with open(XP_FILE, "r") as f:
@@ -68,10 +99,12 @@ def load_xp():
         user_xp = {}
 
 def save_xp():
+    """Save the current user_xp dict to XP_FILE."""
     with open(XP_FILE, "w") as f:
         json.dump(user_xp, f)
 
 def add_xp(user_id, amount):
+    """Add XP to a user and handle level-ups."""
     user_id = str(user_id)
     xp_data = user_xp.get(user_id, {"xp": 0, "level": 1})
     xp_data["xp"] += amount
@@ -83,21 +116,33 @@ def add_xp(user_id, amount):
     save_xp()
 
 def get_level(user_id):
+    """Get the level and XP for a user by their ID."""
     return user_xp.get(str(user_id), {"xp": 0, "level": 1})
 
 def has_mod_or_admin(ctx):
-    roles = [role.name for role in ctx.author.roles]
-    return MOD_ROLE_NAME in roles or ADMIN_ROLE_NAME in roles or ctx.author.id == OWNER_ID
+    """Check if the user has mod or admin privileges or is the owner."""
+    if ctx.author.id == OWNER_ID:
+        return True
+    mod_role_id = config.get("mod_role_id")
+    admin_role_id = config.get("admin_role_id")
+    user_role_ids = [role.id for role in ctx.author.roles]
+    return (mod_role_id and mod_role_id in user_role_ids) or (admin_role_id and admin_role_id in user_role_ids)
 
-# --- Events ---
+# =========================
+# Event Handlers
+# =========================
+
 @bot.event
 async def on_ready():
+    """Event: Called when the bot is ready."""
+    load_config()
     load_balances()
     load_xp()
     print(f"{bot.user} is online and ready!")
 
 @bot.event
 async def on_message(message):
+    """Event: Called on every message. Adds XP and processes commands."""
     if message.author.bot:
         return
     add_xp(message.author.id, random.randint(5, 15))
@@ -105,6 +150,7 @@ async def on_message(message):
 
 @bot.event
 async def on_raw_reaction_add(payload):
+    """Event: Called when a reaction is added. Handles role assignment."""
     if payload.message_id != ROLE_MESSAGE_ID:
         return
     guild = bot.get_guild(payload.guild_id)
@@ -123,6 +169,7 @@ async def on_raw_reaction_add(payload):
 
 @bot.event
 async def on_raw_reaction_remove(payload):
+    """Event: Called when a reaction is removed. Handles role removal."""
     if payload.message_id != ROLE_MESSAGE_ID:
         return
     guild = bot.get_guild(payload.guild_id)
@@ -139,10 +186,63 @@ async def on_raw_reaction_remove(payload):
         except discord.Forbidden:
             print(f"Missing permission to remove role {role_name} from {member}")
 
-# --- Commands ---
+# =========================
+# Text Commands
+# =========================
+
+@bot.command()
+async def setmodrole(ctx, role_input):
+    """Set the moderator role by ID or mention. Owner only."""
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("Only the bot owner can use this command.")
+        return
+    # Try to parse role from mention or ID
+    role = None
+    if role_input.startswith('<@&') and role_input.endswith('>'):
+        role_id = int(role_input[3:-1])
+        role = ctx.guild.get_role(role_id)
+    else:
+        try:
+            role_id = int(role_input)
+            role = ctx.guild.get_role(role_id)
+        except ValueError:
+            await ctx.send("Invalid role ID or mention format.")
+            return
+    if not role:
+        await ctx.send("Role not found.")
+        return
+    config["mod_role_id"] = role.id
+    save_config()
+    await ctx.send(f"Moderator role set to {role.name} (ID: {role.id})")
+
+@bot.command()
+async def setadminrole(ctx, role_input):
+    """Set the admin role by ID or mention. Owner only."""
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("Only the bot owner can use this command.")
+        return
+    # Try to parse role from mention or ID
+    role = None
+    if role_input.startswith('<@&') and role_input.endswith('>'):
+        role_id = int(role_input[3:-1])
+        role = ctx.guild.get_role(role_id)
+    else:
+        try:
+            role_id = int(role_input)
+            role = ctx.guild.get_role(role_id)
+        except ValueError:
+            await ctx.send("Invalid role ID or mention format.")
+            return
+    if not role:
+        await ctx.send("Role not found.")
+        return
+    config["admin_role_id"] = role.id
+    save_config()
+    await ctx.send(f"Admin role set to {role.name} (ID: {role.id})")
 
 @bot.command()
 async def help(ctx):
+    """Show available commands."""
     help_text = """
 commands available:
 
@@ -157,6 +257,9 @@ commands available:
 ?ban @user [reason] - ban a member (mods only)
 ?clear [amount] - delete messages (mods only)
 
+?setmodrole <role_id or @role> - set moderator role (owner only)
+?setadminrole <role_id or @role> - set admin role (owner only)
+
 ?reactionroles - post gender role selection message
 ?nicki - get a random Nicki Minaj lyric
 ?level - show your level and XP
@@ -168,6 +271,7 @@ commands available:
 
 @bot.command()
 async def balance(ctx):
+    """Check your dOLLARIANAS balance."""
     bal = get_balance(ctx.author.id)
     await ctx.send(f"{ctx.author.mention}, you have {bal} {CURRENCY_NAME}.")
 
@@ -343,9 +447,6 @@ async def spotify(ctx, member: discord.Member = None):
 async def on_ready():
     await bot.tree.sync()
     print(f"{bot.user} is online and commands synced!")
-# THis is a test comment
-
-    
 
 # Load environment variables
 load_dotenv()

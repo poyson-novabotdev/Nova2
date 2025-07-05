@@ -1,1 +1,39 @@
 .env
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Distribution / packaged files
+.eggs/
+dist/
+build/
+*.egg
+*.whl
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# IDE and editor files
+.idea/  # PyCharm
+.vscode/ # VS Code
+*.sublime-project
+*.sublime-workspace
+.project # Eclipse
+.settings/ # Eclipse
+.DS_Store # macOS
+Thumbs.db # Windows
+
+# Jupyter Notebook files
+.ipynb_checkpoints/
+
+# Miscellaneous
+*.log
+*.sqlite3
+*.bak
