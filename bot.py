@@ -5,10 +5,12 @@ import random
 from datetime import datetime, timedelta, timezone
 import os
 from dotenv import load_dotenv
+from discord import app_commands
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.presences = True
 
 bot = commands.Bot(command_prefix="?", intents=intents, help_command=None)
 
@@ -254,6 +256,12 @@ async def balance(ctx):
     bal = get_balance(ctx.author.id)
     await ctx.send(f"{ctx.author.mention}, you have {bal} {CURRENCY_NAME}.")
 
+# Slash command version of balance
+@bot.tree.command(name="balance", description="Check your dOLLARIANAS balance (slash command)")
+async def balance_slash(interaction: discord.Interaction):
+    bal = get_balance(interaction.user.id)
+    await interaction.response.send_message(f"{interaction.user.mention}, you have {bal} {CURRENCY_NAME}.")
+
 @bot.command()
 async def beg(ctx):
     now = datetime.now(timezone.utc)
@@ -432,5 +440,197 @@ TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     print("Error: TOKEN not found in .env file")
     exit(1)
+
+# Slash command version of beg
+@bot.tree.command(name="beg", description="Beg for money (10 min cooldown)")
+async def beg_slash(interaction: discord.Interaction):
+    now = datetime.now(timezone.utc)
+    user_id = interaction.user.id
+    last = beg_cooldowns.get(user_id)
+    if last and now - last < timedelta(minutes=10):
+        rem = timedelta(minutes=10) - (now - last)
+        await interaction.response.send_message(f"{interaction.user.mention}, you can beg again in {str(rem).split('.')[0]}", ephemeral=True)
+        return
+    beg_cooldowns[user_id] = now
+    if random.random() < 0.5:
+        await interaction.response.send_message(f"{interaction.user.mention}, no one gave you anything this time.")
+    else:
+        amount = random.randint(1, 20)
+        change_balance(user_id, amount)
+        await interaction.response.send_message(f"{interaction.user.mention}, you begged and got {amount} {CURRENCY_NAME}!")
+
+# Slash command version of daily
+@bot.tree.command(name="daily", description="Claim daily reward (24h cooldown)")
+async def daily_slash(interaction: discord.Interaction):
+    now = datetime.now(timezone.utc)
+    user_id = interaction.user.id
+    last = daily_cooldowns.get(user_id)
+    if last and now - last < timedelta(hours=24):
+        rem = timedelta(hours=24) - (now - last)
+        await interaction.response.send_message(f"{interaction.user.mention}, you can claim your daily reward in {str(rem).split('.')[0]}", ephemeral=True)
+        return
+    change_balance(user_id, 100)
+    daily_cooldowns[user_id] = now
+    await interaction.response.send_message(f"{interaction.user.mention}, you claimed your daily 100 {CURRENCY_NAME}!")
+
+# Slash command version of work
+@bot.tree.command(name="work", description="Work a job to earn money (20 min cooldown)")
+async def work_slash(interaction: discord.Interaction):
+    now = datetime.now(timezone.utc)
+    user_id = interaction.user.id
+    last = work_cooldowns.get(user_id)
+    if last and now - last < timedelta(minutes=20):
+        rem = timedelta(minutes=20) - (now - last)
+        await interaction.response.send_message(f"{interaction.user.mention}, you can work again in {str(rem).split('.')[0]}", ephemeral=True)
+        return
+    work_cooldowns[user_id] = now
+    jobs = ["chef", "barista", "programmer", "driver", "artist", "bjs"]
+    job = random.choice(jobs)
+    amount = random.randint(10, 50)
+    change_balance(user_id, amount)
+    await interaction.response.send_message(f"{interaction.user.mention}, you worked as a {job} and earned {amount} {CURRENCY_NAME}!")
+
+# Slash command version of impregnate
+@bot.tree.command(name="impregnate", description="Impregnate someone, child support paid randomly")
+@app_commands.describe(partner="The user to impregnate")
+async def impregnate_slash(interaction: discord.Interaction, partner: discord.Member):
+    if partner.bot:
+        await interaction.response.send_message("You cannot impregnate a bot!", ephemeral=True)
+        return
+    if partner.id == interaction.user.id:
+        await interaction.response.send_message("You cannot impregnate yourself!", ephemeral=True)
+        return
+    payer_is_author = random.choice([True, False])
+    child_support = 50
+    payer = interaction.user if payer_is_author else partner
+    receiver = partner if payer_is_author else interaction.user
+    if get_balance(payer.id) < child_support:
+        await interaction.response.send_message(f"{payer.mention} does not have enough {CURRENCY_NAME} to pay child support!", ephemeral=True)
+        return
+    change_balance(payer.id, -child_support)
+    change_balance(receiver.id, child_support)
+    await interaction.response.send_message(f"{interaction.user.mention} impregnated {partner.mention}!\n{payer.mention} pays {child_support} {CURRENCY_NAME} as child support to {receiver.mention}.")
+
+# Slash command version of nuke
+@bot.tree.command(name="nuke", description="Delete all messages in channel (mods only)")
+async def nuke_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    await interaction.channel.purge(limit=1000)
+    await interaction.response.send_message("boom")
+
+# Slash command version of kick
+@bot.tree.command(name="kick", description="Kick a member (mods only)")
+@app_commands.describe(member="The member to kick", reason="Reason for kick")
+async def kick_slash(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    try:
+        await member.kick(reason=reason)
+        await interaction.response.send_message(f"Kicked {member} for: {reason}")
+    except Exception as e:
+        await interaction.response.send_message(f"Failed to kick: {e}", ephemeral=True)
+
+# Slash command version of ban
+@bot.tree.command(name="ban", description="Ban a member (mods only)")
+@app_commands.describe(member="The member to ban", reason="Reason for ban")
+async def ban_slash(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    try:
+        await member.ban(reason=reason)
+        await interaction.response.send_message(f"Banned {member} for: {reason}")
+    except Exception as e:
+        await interaction.response.send_message(f"Failed to ban: {e}", ephemeral=True)
+
+# Slash command version of clear
+@bot.tree.command(name="clear", description="Delete messages (mods only)")
+@app_commands.describe(amount="Number of messages to delete (default 5)")
+async def clear_slash(interaction: discord.Interaction, amount: int = 5):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    deleted = await interaction.channel.purge(limit=amount)
+    await interaction.response.send_message(f"Cleared {len(deleted)} messages", ephemeral=True)
+
+# Slash command version of reactionroles
+@bot.tree.command(name="reactionroles", description="Post gender role selection message")
+async def reactionroles_slash(interaction: discord.Interaction):
+    embed = discord.Embed(title="Choose your gender role by reacting", color=0x00ff00)
+    embed.description = (
+        "React with the emoji to get the role:\n"
+        "💙 for mALE\n"
+        "💗 for fEMALE\n"
+        "🤍 for oTHER (AKS)\n"
+        "Remove your reaction to remove the role."
+    )
+    msg = await interaction.channel.send(embed=embed)
+    global ROLE_MESSAGE_ID
+    ROLE_MESSAGE_ID = msg.id
+    for emoji in EMOJI_TO_ROLE:
+        await msg.add_reaction(emoji)
+    await interaction.response.send_message("Reaction roles message posted!", ephemeral=True)
+
+# Slash command version of nicki
+@bot.tree.command(name="nicki", description="Get a random Nicki Minaj lyric")
+async def nicki_slash(interaction: discord.Interaction):
+    lyrics = [
+        "lIKE mJ dOCTOR, tHEY kILLIN mE. pROPOFOl, i kNOW tHEY hOPE i fALL.bUT tELL eM wINNIN iS mY mUTHUFUCKIN pROTOCOL..",
+        "mE, nICKI m, i gOT tOO mANY wINS!!!",
+        "aYO tONIGHT iS tHE nIGHT tHAT iMMMA gET tWISTED, mYX mOSCATO n vODKA iMA mIX iT.",
+        "yOUR fLOW iS sUCH a bORE...",
+        "aND i wILL rETIRE wITH tHE cROWN... yES!",
+        "bE wHO yOU iS nEVER bE wHO yOU aRENT nEVA."
+    ]
+    await interaction.response.send_message(random.choice(lyrics))
+
+# Slash command version of level
+@bot.tree.command(name="level", description="Show your level and XP")
+async def level_slash(interaction: discord.Interaction):
+    data = get_level(interaction.user.id)
+    await interaction.response.send_message(f"{interaction.user.mention}, you are level {data['level']} with {data['xp']} XP.")
+
+# Slash command version of leaderboard
+@bot.tree.command(name="leaderboard", description="Show top 5 users by level")
+async def leaderboard_slash(interaction: discord.Interaction):
+    sorted_users = sorted(user_xp.items(), key=lambda x: x[1]['level'] * 100 + x[1]['xp'], reverse=True)
+    top = "Top 5 users:\n"
+    for i, (user_id, data) in enumerate(sorted_users[:5]):
+        guild = interaction.guild
+        member = guild.get_member(int(user_id)) if guild else None
+        if member:
+            top += f"{i+1}. {member.display_name} - Level {data['level']}\n"
+    await interaction.response.send_message(top)
+
+# Slash command version of spotify
+@bot.tree.command(name="spotify", description="Show Spotify status for a user (or yourself)")
+@app_commands.describe(member="The member to check (optional)")
+async def spotify_slash(interaction: discord.Interaction, member: discord.Member = None):
+    member = member or interaction.user
+    # Get the full member object from the guild
+    if interaction.guild:
+        member = interaction.guild.get_member(member.id)
+    if not member:
+        await interaction.response.send_message("Could not find that member.", ephemeral=True)
+        return
+    for activity in member.activities:
+        if isinstance(activity, discord.Spotify):
+            embed = discord.Embed(
+                title=f"{member.display_name} is listening to Spotify!",
+                description=f"**{activity.title}** by {activity.artist}\nAlbum: {activity.album}",
+                color=0x1DB954
+            )
+            embed.set_thumbnail(url=activity.album_cover_url)
+            embed.add_field(name="Track URL", value=f"[Open in Spotify](https://open.spotify.com/track/{activity.track_id})")
+            await interaction.response.send_message(embed=embed)
+            return
+    await interaction.response.send_message(f"{member.display_name} is not listening to Spotify right now.")
 
 bot.run(TOKEN)
