@@ -13,6 +13,7 @@ import time
 import requests
 import re
 import asyncio
+from discord.ui import View, Button
 
 # =========================
 # Intents and Bot Instance
@@ -54,6 +55,9 @@ EMOJI_TO_ROLE = {
 }
 
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+
+# AFK system
+AFK_STATUS = {}  # user_id: {"reason": str, "since": datetime, "mentions": set(user_id)}
 
 # International days dictionary (all 365 days, placeholder names)
 INTERNATIONAL_DAYS = {
@@ -367,25 +371,40 @@ async def on_ready():
     load_config()
     load_balances()
     load_xp()
-    print(f"{bot.user} is online and ready!")
+    await bot.tree.sync()
+    print(f"{bot.user} is online and commands synced!")
 
 @bot.event
 async def on_message(message):
     """Event: Called on every message. Adds XP and processes commands."""
     if message.author.bot:
         return
-    # AFK auto-return
+    # AFK return logic
     if message.author.id in AFK_STATUS:
-        del AFK_STATUS[message.author.id]
-        await message.channel.send(embed=nova_embed("aFK", f"wELCOME bACK, {message.author.display_name}!"))
-    # AFK mention check
+        afk = AFK_STATUS.pop(message.author.id)
+        since = afk["since"]
+        delta = datetime.now(timezone.utc) - since
+        mins = int(delta.total_seconds() // 60)
+        hours = mins // 60
+        mins = mins % 60
+        time_str = f"{hours}h {mins}m" if hours else f"{mins}m"
+        view = MentionsView(message.author.id)
+        await message.channel.send(embed=nova_embed("aFK", f"wELCOME bACK, {message.author.display_name}! yOU wERE gONE fOR {time_str}."), view=view)
+    # Notify if mentioning AFK users
     mentioned_ids = [user.id for user in message.mentions]
     for uid in mentioned_ids:
         if uid in AFK_STATUS:
-            reason = AFK_STATUS[uid]
+            AFK_STATUS[uid]["mentions"].add(message.author.id)
+            afk = AFK_STATUS[uid]
             member = message.guild.get_member(uid)
             if member:
-                await message.channel.send(embed=nova_embed("aFK", f"{member.display_name} iS aFK: {reason}"))
+                since = afk["since"]
+                delta = datetime.now(timezone.utc) - since
+                mins = int(delta.total_seconds() // 60)
+                hours = mins // 60
+                mins = mins % 60
+                time_str = f"{hours}h {mins}m" if hours else f"{mins}m"
+                await message.channel.send(embed=nova_embed("aFK", f"{member.display_name} iS aFK: {afk['reason']} ({time_str})"))
     add_xp(message.author.id, random.randint(5, 15))
     # Check if message starts with "nova:" to make Nova say the text
     if message.content.lower().startswith("nova:"):
@@ -550,16 +569,33 @@ async def beg(ctx):
 
 @bot.command()
 async def daily(ctx):
-    now = datetime.now(timezone.utc)
-    user_id = ctx.author.id
+    user_id = str(ctx.author.id)
+    now = datetime.utcnow()
     last = daily_cooldowns.get(user_id)
-    if last and now - last < timedelta(hours=24):
-        rem = timedelta(hours=24) - (now - last)
-        await ctx.send(f"{ctx.author.mention}, you can claim your daily reward in {str(rem).split('.')[0]}.")
+    if last and (now - last).total_seconds() < 86400:
+        remaining = 86400 - (now - last).total_seconds()
+        hours = int(remaining // 3600)
+        mins = int((remaining % 3600) // 60)
+        await ctx.send(embed=nova_embed("dAILY", f"yOU aLREADY cLAIMED yOUR dAILY! tRY aGAIN iN {hours}h {mins}m."))
         return
-    change_balance(user_id, 100)
     daily_cooldowns[user_id] = now
-    await ctx.send(f"{ctx.author.mention}, you claimed your daily 100 {CURRENCY_NAME}!")
+    change_balance(ctx.author.id, 100)
+    await ctx.send(embed=nova_embed("dAILY", f"yOU cLAIMED yOUR dAILY 100 {CURRENCY_NAME}!"))
+
+@bot.tree.command(name="daily", description="Claim daily reward (24h cooldown)")
+async def daily_slash(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+    now = datetime.utcnow()
+    last = daily_cooldowns.get(user_id)
+    if last and (now - last).total_seconds() < 86400:
+        remaining = 86400 - (now - last).total_seconds()
+        hours = int(remaining // 3600)
+        mins = int((remaining % 3600) // 60)
+        await interaction.response.send_message(embed=nova_embed("dAILY", f"yOU aLREADY cLAIMED yOUR dAILY! tRY aGAIN iN {hours}h {mins}m."), ephemeral=True)
+        return
+    daily_cooldowns[user_id] = now
+    change_balance(interaction.user.id, 100)
+    await interaction.response.send_message(embed=nova_embed("dAILY", f"yOU cLAIMED yOUR dAILY 100 {CURRENCY_NAME}!"))
 
 @bot.command()
 async def work(ctx):
@@ -700,11 +736,6 @@ async def spotify(ctx, member: discord.Member = None):
             return
     await ctx.send(f"{member.display_name} is not listening to Spotify right now.")
 
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print(f"{bot.user} is online and commands synced!")
-
 # Load environment variables
 load_dotenv()
 
@@ -731,20 +762,6 @@ async def beg_slash(interaction: discord.Interaction):
         amount = random.randint(1, 20)
         change_balance(user_id, amount)
         await interaction.response.send_message(f"{interaction.user.mention}, you begged and got {amount} {CURRENCY_NAME}!")
-
-# Slash command version of daily
-@bot.tree.command(name="daily", description="Claim daily reward (24h cooldown)")
-async def daily_slash(interaction: discord.Interaction):
-    now = datetime.now(timezone.utc)
-    user_id = interaction.user.id
-    last = daily_cooldowns.get(user_id)
-    if last and now - last < timedelta(hours=24):
-        rem = timedelta(hours=24) - (now - last)
-        await interaction.response.send_message(f"{interaction.user.mention}, you can claim your daily reward in {str(rem).split('.')[0]}", ephemeral=True)
-        return
-    change_balance(user_id, 100)
-    daily_cooldowns[user_id] = now
-    await interaction.response.send_message(f"{interaction.user.mention}, you claimed your daily 100 {CURRENCY_NAME}!")
 
 # Slash command version of work
 @bot.tree.command(name="work", description="Work a job to earn money (20 min cooldown)")
@@ -1073,32 +1090,43 @@ async def emancipate_slash(interaction: discord.Interaction, user: discord.Membe
     await interaction.response.send_message(embed=nova_embed("eMANCIPATE", f"{user.display_name} hAS bEEN eMANCIPATED bY {interaction.user.display_name}!"))
 
 # AFK
-AFK_STATUS = {}
+AFK_STATUS = {}  # user_id: {"reason": str, "since": datetime, "mentions": set(user_id)}
 
 @bot.command()
 async def afk(ctx, *, reason: str = "aFK"): 
-    AFK_STATUS[ctx.author.id] = reason
+    AFK_STATUS[ctx.author.id] = {"reason": reason, "since": datetime.datetime.utcnow(), "mentions": set()}
     await ctx.send(embed=nova_embed("aFK", f"{ctx.author.display_name} iS nOW aFK: {reason}"))
 
 @bot.tree.command(name="afk", description="Set your AFK status with an optional message")
 @app_commands.describe(reason="Why are you AFK?")
 async def afk_slash(interaction: discord.Interaction, reason: str = "aFK"):
-    AFK_STATUS[interaction.user.id] = reason
+    AFK_STATUS[interaction.user.id] = {"reason": reason, "since": datetime.datetime.utcnow(), "mentions": set()}
     await interaction.response.send_message(embed=nova_embed("aFK", f"{interaction.user.display_name} iS nOW aFK: {reason}"), ephemeral=True)
 
-@bot.event
-async def on_mention(message):
-    if message.author.bot:
-        return
-    mentioned_ids = [user.id for user in message.mentions]
-    for uid in mentioned_ids:
-        if uid in AFK_STATUS:
-            reason = AFK_STATUS[uid]
-            member = message.guild.get_member(uid)
-            if member:
-                await message.channel.send(embed=nova_embed("aFK", f"{member.display_name} iS aFK: {reason}"))
+class MentionsView(View):
+    def __init__(self, user_id):
+        super().__init__(timeout=60)
+        self.user_id = user_id
 
-# Moderation
+    @discord.ui.button(label="cHECK mENTIONS", style=discord.ButtonStyle.primary)
+    async def check_mentions(self, interaction: discord.Interaction, button: Button):
+        afk = AFK_STATUS.get(self.user_id)
+        if not afk or not afk["mentions"]:
+            await interaction.response.send_message(embed=nova_embed("aFK", "nO oNE mENTIONED yOU wHILE yOU wERE aWAY!"), ephemeral=True)
+            return
+        guild = interaction.guild
+        names = []
+        for uid in afk["mentions"]:
+            member = guild.get_member(uid)
+            if member:
+                names.append(member.display_name)
+        if names:
+            await interaction.response.send_message(embed=nova_embed("aFK mENTIONS", f"yOU wERE mENTIONED bY: {', '.join(names)}"), ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=nova_embed("aFK", "nO oNE mENTIONED yOU wHILE yOU wERE aWAY!"), ephemeral=True)
+
+
+
 @bot.command()
 async def mute(ctx, member: discord.Member = None):
     if not has_mod_or_admin(ctx):
@@ -1110,15 +1138,20 @@ async def mute(ctx, member: discord.Member = None):
     if member == ctx.author:
         await ctx.send(embed=nova_embed("mUTE", "nICE tRY, bUT yOU cAN'T mUTE yOURSELF!"))
         return
-    overwrite = ctx.channel.overwrites_for(member)
-    if overwrite.send_messages is False:
-        await ctx.send(embed=nova_embed("mUTE", f"{member.mention} iS aLREADY mUTED hERE!"))
+    role = await get_or_create_muted_role(ctx.guild)
+    if not role:
+        await ctx.send(embed=nova_embed("mUTE", "cOULD nOT cREATE oR fIND tHE mUTED rOLE!"))
         return
-    overwrite.send_messages = False
-    await ctx.channel.set_permissions(member, overwrite=overwrite)
-    await ctx.send(embed=nova_embed("mUTE", f"{member.mention} hAS bEEN mUTED iN {ctx.channel.mention}!"))
+    if role in member.roles:
+        await ctx.send(embed=nova_embed("mUTE", f"{member.mention} iS aLREADY mUTED!"))
+        return
+    try:
+        await member.add_roles(role, reason="Muted by Nova")
+        await ctx.send(embed=nova_embed("mUTE", f"{member.mention} hAS bEEN mUTED sERVER-WIDE!"))
+    except Exception:
+        await ctx.send(embed=nova_embed("mUTE", "cOULD nOT mUTE tHAT uSER!"))
 
-@bot.tree.command(name="mute", description="Mute a member in this channel (admin only)")
+@bot.tree.command(name="mute", description="Mute a member server-wide (admin only)")
 @app_commands.describe(member="Member to mute")
 async def mute_slash(interaction: discord.Interaction, member: discord.Member):
     ctx = await bot.get_context(interaction)
@@ -1128,13 +1161,18 @@ async def mute_slash(interaction: discord.Interaction, member: discord.Member):
     if member == interaction.user:
         await interaction.response.send_message(embed=nova_embed("mUTE", "nICE tRY, bUT yOU cAN'T mUTE yOURSELF!"), ephemeral=True)
         return
-    overwrite = interaction.channel.overwrites_for(member)
-    if overwrite.send_messages is False:
-        await interaction.response.send_message(embed=nova_embed("mUTE", f"{member.mention} iS aLREADY mUTED hERE!"), ephemeral=True)
+    role = await get_or_create_muted_role(interaction.guild)
+    if not role:
+        await interaction.response.send_message(embed=nova_embed("mUTE", "cOULD nOT cREATE oR fIND tHE mUTED rOLE!"), ephemeral=True)
         return
-    overwrite.send_messages = False
-    await interaction.channel.set_permissions(member, overwrite=overwrite)
-    await interaction.response.send_message(embed=nova_embed("mUTE", f"{member.mention} hAS bEEN mUTED iN {interaction.channel.mention}!"))
+    if role in member.roles:
+        await interaction.response.send_message(embed=nova_embed("mUTE", f"{member.mention} iS aLREADY mUTED!"), ephemeral=True)
+        return
+    try:
+        await member.add_roles(role, reason="Muted by Nova")
+        await interaction.response.send_message(embed=nova_embed("mUTE", f"{member.mention} hAS bEEN mUTED sERVER-WIDE!"))
+    except Exception:
+        await interaction.response.send_message(embed=nova_embed("mUTE", "cOULD nOT mUTE tHAT uSER!"), ephemeral=True)
 
 @bot.command()
 async def unmute(ctx, member: discord.Member = None):
@@ -1144,28 +1182,32 @@ async def unmute(ctx, member: discord.Member = None):
     if not member:
         await ctx.send(embed=nova_embed("uNMUTE", "yOU nEED tO mENTION sOMEONE!"))
         return
-    overwrite = ctx.channel.overwrites_for(member)
-    if overwrite.send_messages is not False:
-        await ctx.send(embed=nova_embed("uNMUTE", f"{member.mention} iS nOT mUTED hERE!"))
+    role = discord.utils.get(ctx.guild.roles, name="Muted")
+    if not role or role not in member.roles:
+        await ctx.send(embed=nova_embed("uNMUTE", f"{member.mention} iS nOT mUTED!"))
         return
-    overwrite.send_messages = None
-    await ctx.channel.set_permissions(member, overwrite=overwrite)
-    await ctx.send(embed=nova_embed("uNMUTE", f"{member.mention} hAS bEEN uNMUTED iN {ctx.channel.mention}!"))
+    try:
+        await member.remove_roles(role, reason="Unmuted by Nova")
+        await ctx.send(embed=nova_embed("uNMUTE", f"{member.mention} hAS bEEN uNMUTED!"))
+    except Exception:
+        await ctx.send(embed=nova_embed("uNMUTE", "cOULD nOT uNMUTE tHAT uSER!"))
 
-@bot.tree.command(name="unmute", description="Unmute a member in this channel (admin only)")
+@bot.tree.command(name="unmute", description="Unmute a member server-wide (admin only)")
 @app_commands.describe(member="Member to unmute")
 async def unmute_slash(interaction: discord.Interaction, member: discord.Member):
     ctx = await bot.get_context(interaction)
     if not has_mod_or_admin(ctx):
         await interaction.response.send_message(embed=nova_embed("uNMUTE", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
         return
-    overwrite = interaction.channel.overwrites_for(member)
-    if overwrite.send_messages is not False:
-        await interaction.response.send_message(embed=nova_embed("uNMUTE", f"{member.mention} iS nOT mUTED hERE!"), ephemeral=True)
+    role = discord.utils.get(interaction.guild.roles, name="Muted")
+    if not role or role not in member.roles:
+        await interaction.response.send_message(embed=nova_embed("uNMUTE", f"{member.mention} iS nOT mUTED!"), ephemeral=True)
         return
-    overwrite.send_messages = None
-    await interaction.channel.set_permissions(member, overwrite=overwrite)
-    await interaction.response.send_message(embed=nova_embed("uNMUTE", f"{member.mention} hAS bEEN uNMUTED iN {interaction.channel.mention}!"))
+    try:
+        await member.remove_roles(role, reason="Unmuted by Nova")
+        await interaction.response.send_message(embed=nova_embed("uNMUTE", f"{member.mention} hAS bEEN uNMUTED!"))
+    except Exception:
+        await interaction.response.send_message(embed=nova_embed("uNMUTE", "cOULD nOT uNMUTE tHAT uSER!"), ephemeral=True)
 
 @bot.command()
 async def case(ctx):
@@ -1191,6 +1233,9 @@ async def case_slash(interaction: discord.Interaction):
 
 @bot.command()
 async def snipe(ctx):
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("sNIPE", "yOU dON'T hAVE pERMISSION!"))
+        return
     data = snipes.get(ctx.channel.id)
     if not data:
         await ctx.send(embed=nova_embed("sNIPE", "nOTHING tO sNIPE!"))
@@ -1201,6 +1246,10 @@ async def snipe(ctx):
 
 @bot.tree.command(name="snipe", description="Show the last deleted message in this channel")
 async def snipe_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message(embed=nova_embed("sNIPE", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
     data = snipes.get(interaction.channel.id)
     if not data:
         await interaction.response.send_message(embed=nova_embed("sNIPE", "nOTHING tO sNIPE!"), ephemeral=True)
