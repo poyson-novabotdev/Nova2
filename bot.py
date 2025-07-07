@@ -59,6 +59,9 @@ SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 # AFK system
 AFK_STATUS = {}  # user_id: {"reason": str, "since": datetime, "mentions": set(user_id)}
 
+# Runway system
+RUNWAY_CHANNEL_ID = None  # Set this to your runway channel ID
+
 # International days dictionary (all 365 days, placeholder names)
 INTERNATIONAL_DAYS = {
     "04-01": "wORLD bRAILLE dAY",
@@ -520,7 +523,7 @@ async def help(ctx):
 Prefix & Slash Commands:
 /balance, /beg, /daily, /work, /pay, /shop, /buy, /inventory
 /setbday, /birthday, /birthdays, /today, /welcome, /rules, /ping, /about, /uptime
-/marry, /divorce, /adopt, /emancipate, /familytree, /kiss, /slap, /whoasked, /afk
+/marry, /divorce, /adopt, /emancipate, /getemancipated, /familytree, /kiss, /slap, /whoasked, /voguebattle, /afk
 /mute, /unmute, /case, /snipe, /edsnipe, /slowmode, /lock, /unlock
 /reactionroles, /nicki, /level, /leaderboard, /spotify
 """
@@ -532,7 +535,7 @@ async def help_slash(interaction: discord.Interaction):
 Prefix & Slash Commands:
 /balance, /beg, /daily, /work, /pay, /shop, /buy, /inventory
 /setbday, /birthday, /birthdays, /today, /welcome, /rules, /ping, /about, /uptime
-/marry, /divorce, /adopt, /emancipate, /familytree, /kiss, /slap, /whoasked, /afk
+/marry, /divorce, /adopt, /emancipate, /getemancipated, /familytree, /kiss, /slap, /whoasked, /voguebattle, /afk
 /mute, /unmute, /case, /snipe, /edsnipe, /slowmode, /lock, /unlock
 /reactionroles, /nicki, /level, /leaderboard, /spotify
 """
@@ -1028,21 +1031,22 @@ async def adopt(ctx, user: discord.Member):
         await ctx.send(embed=nova_embed("aDOPT", "yOU cAN'T aDOPT yOURSELF!"))
         return
     relationships = load_relationships()
-    key = f"adopted:{ctx.author.id}"
-    if key in relationships:
-        await ctx.send(embed=nova_embed("aDOPT", "yOU'VE aLREADY aDOPTED sOMEONE!"))
-        return
+    
+    # Check if user is already adopted by someone
+    for key, value in relationships.items():
+        if key.startswith("adopted:") and value == user.id:
+            adopter_id = int(key.split(":")[1])
+            adopter = ctx.guild.get_member(adopter_id)
+            if adopter:
+                await ctx.send(embed=nova_embed("aDOPT", f"{user.display_name} iS aLREADY aDOPTED bY {adopter.display_name}!"))
+                return
+    
     if user.id in pending_adoptions:
         await ctx.send(embed=nova_embed("aDOPT", "tHAT uSER aLREADY hAS a pENDING aDOPTION!"))
         return
     pending_adoptions[user.id] = ctx.author.id
-    await ctx.send(embed=nova_embed("aDOPT", f"🍼 {ctx.author.display_name} wANTS tO aDOPT {user.display_name}! {user.mention}, tYPE `?acceptadopt` tO aCCEPT. yOU hAVE 30 sECONDS!"))
-    async def expire():
-        await asyncio.sleep(30)
-        if user.id in pending_adoptions and pending_adoptions[user.id] == ctx.author.id:
-            del pending_adoptions[user.id]
-            await ctx.send(embed=nova_embed("aDOPT", f"{user.display_name} dIDN'T rESPOND iN tIME! tRY aGAIN lATER."))
-    ctx.bot.loop.create_task(expire())
+    view = AdoptionView(ctx.author.id, user.id)
+    await ctx.send(embed=nova_embed("aDOPT", f"🍼 {ctx.author.display_name} wANTS tO aDOPT {user.display_name}! {user.mention}, cLICK tHE bUTTONS bELOW!"), view=view)
 
 @bot.tree.command(name="adopt", description="Adopt a user (fun roleplay)")
 @app_commands.describe(user="The user to adopt")
@@ -1051,21 +1055,83 @@ async def adopt_slash(interaction: discord.Interaction, user: discord.Member):
         await interaction.response.send_message(embed=nova_embed("aDOPT", "yOU cAN'T aDOPT yOURSELF!"))
         return
     relationships = load_relationships()
-    key = f"adopted:{interaction.user.id}"
-    if key in relationships:
-        await interaction.response.send_message(embed=nova_embed("aDOPT", "yOU'VE aLREADY aDOPTED sOMEONE!"))
-        return
+    
+    # Check if user is already adopted by someone
+    for key, value in relationships.items():
+        if key.startswith("adopted:") and value == user.id:
+            adopter_id = int(key.split(":")[1])
+            adopter = interaction.guild.get_member(adopter_id)
+            if adopter:
+                await interaction.response.send_message(embed=nova_embed("aDOPT", f"{user.display_name} iS aLREADY aDOPTED bY {adopter.display_name}!"))
+                return
+    
     if user.id in pending_adoptions:
         await interaction.response.send_message(embed=nova_embed("aDOPT", "tHAT uSER aLREADY hAS a pENDING aDOPTION!"))
         return
     pending_adoptions[user.id] = interaction.user.id
-    await interaction.response.send_message(embed=nova_embed("aDOPT", f"🍼 {interaction.user.display_name} wANTS tO aDOPT {user.display_name}! {user.mention}, uSE `/acceptadopt` tO aCCEPT. yOU hAVE 30 sECONDS!"))
-    async def expire():
-        await asyncio.sleep(30)
-        if user.id in pending_adoptions and pending_adoptions[user.id] == interaction.user.id:
-            del pending_adoptions[user.id]
-            await interaction.followup.send(embed=nova_embed("aDOPT", f"{user.display_name} dIDN'T rESPOND iN tIME! tRY aGAIN lATER."))
-    interaction.client.loop.create_task(expire())
+    view = AdoptionView(interaction.user.id, user.id)
+    await interaction.response.send_message(embed=nova_embed("aDOPT", f"🍼 {interaction.user.display_name} wANTS tO aDOPT {user.display_name}! {user.mention}, cLICK tHE bUTTONS bELOW!"), view=view)
+
+class AdoptionView(View):
+    def __init__(self, adopter_id, adoptee_id):
+        super().__init__(timeout=30)
+        self.adopter_id = adopter_id
+        self.adoptee_id = adoptee_id
+
+    @discord.ui.button(label="aCCEPT", style=discord.ButtonStyle.green, emoji="✅")
+    async def accept_adoption(self, interaction: discord.Interaction, button: Button):
+        if interaction.user.id != self.adoptee_id:
+            await interaction.response.send_message(embed=nova_embed("aDOPTION", "tHIS aDOPTION iS nOT fOR yOU!"), ephemeral=True)
+            return
+        
+        if self.adoptee_id not in pending_adoptions or pending_adoptions[self.adoptee_id] != self.adopter_id:
+            await interaction.response.send_message(embed=nova_embed("aDOPTION", "tHIS aDOPTION hAS eXPIRED!"), ephemeral=True)
+            return
+        
+        adopter = interaction.guild.get_member(self.adopter_id)
+        if not adopter:
+            await interaction.response.send_message(embed=nova_embed("aDOPTION", "aDOPTER nOT fOUND!"), ephemeral=True)
+            return
+        
+        relationships = load_relationships()
+        key = f"adopted:{self.adopter_id}"
+        relationships[key] = self.adoptee_id
+        save_relationships(relationships)
+        
+        del pending_adoptions[self.adoptee_id]
+        
+        # Disable all buttons
+        for child in self.children:
+            child.disabled = True
+        
+        await interaction.response.edit_message(
+            embed=nova_embed("aDOPTION aCCEPTED", f"🍼 {interaction.user.display_name} hAS bEEN aDOPTED bY {adopter.display_name}!"),
+            view=self
+        )
+
+    @discord.ui.button(label="dECLINE", style=discord.ButtonStyle.red, emoji="❌")
+    async def decline_adoption(self, interaction: discord.Interaction, button: Button):
+        if interaction.user.id != self.adoptee_id:
+            await interaction.response.send_message(embed=nova_embed("aDOPTION", "tHIS aDOPTION iS nOT fOR yOU!"), ephemeral=True)
+            return
+        
+        if self.adoptee_id not in pending_adoptions or pending_adoptions[self.adoptee_id] != self.adopter_id:
+            await interaction.response.send_message(embed=nova_embed("aDOPTION", "tHIS aDOPTION hAS eXPIRED!"), ephemeral=True)
+            return
+        
+        adopter = interaction.guild.get_member(self.adopter_id)
+        adopter_name = adopter.display_name if adopter else "Unknown"
+        
+        del pending_adoptions[self.adoptee_id]
+        
+        # Disable all buttons
+        for child in self.children:
+            child.disabled = True
+        
+        await interaction.response.edit_message(
+            embed=nova_embed("aDOPTION dECLINED", f"😔 {interaction.user.display_name} dECLINED tHE aDOPTION fROM {adopter_name}!"),
+            view=self
+        )
 
 @bot.command()
 async def emancipate(ctx, user: discord.Member):
@@ -1089,8 +1155,389 @@ async def emancipate_slash(interaction: discord.Interaction, user: discord.Membe
     save_relationships(relationships)
     await interaction.response.send_message(embed=nova_embed("eMANCIPATE", f"{user.display_name} hAS bEEN eMANCIPATED bY {interaction.user.display_name}!"))
 
+@bot.command()
+async def getemancipated(ctx):
+    relationships = load_relationships()
+    
+    # Find if user is adopted by someone
+    adopted_by = None
+    for key, value in relationships.items():
+        if key.startswith("adopted:") and value == ctx.author.id:
+            adopter_id = int(key.split(":")[1])
+            adopted_by = ctx.guild.get_member(adopter_id)
+            break
+    
+    if not adopted_by:
+        await ctx.send(embed=nova_embed("gET eMANCIPATED", "yOU aREN'T aDOPTED bY aNYONE!"))
+        return
+    
+    # Remove the adoption
+    for key, value in relationships.items():
+        if key.startswith("adopted:") and value == ctx.author.id:
+            del relationships[key]
+            break
+    
+    save_relationships(relationships)
+    await ctx.send(embed=nova_embed("gET eMANCIPATED", f"🏛️ {ctx.author.display_name} hAS bEEN eMANCIPATED fROM {adopted_by.display_name}! yOU aRE nOW fREE!"))
+
+@bot.tree.command(name="getemancipated", description="Emancipate yourself from your adoptive parent")
+async def getemancipated_slash(interaction: discord.Interaction):
+    relationships = load_relationships()
+    
+    # Find if user is adopted by someone
+    adopted_by = None
+    for key, value in relationships.items():
+        if key.startswith("adopted:") and value == interaction.user.id:
+            adopter_id = int(key.split(":")[1])
+            adopted_by = interaction.guild.get_member(adopter_id)
+            break
+    
+    if not adopted_by:
+        await interaction.response.send_message(embed=nova_embed("gET eMANCIPATED", "yOU aREN'T aDOPTED bY aNYONE!"), ephemeral=True)
+        return
+    
+    # Remove the adoption
+    for key, value in relationships.items():
+        if key.startswith("adopted:") and value == interaction.user.id:
+            del relationships[key]
+            break
+    
+    save_relationships(relationships)
+    await interaction.response.send_message(embed=nova_embed("gET eMANCIPATED", f"🏛️ {interaction.user.display_name} hAS bEEN eMANCIPATED fROM {adopted_by.display_name}! yOU aRE nOW fREE!"))
+
+@bot.command()
+async def familytree(ctx, user: discord.Member = None):
+    user = user or ctx.author
+    relationships = load_relationships()
+    
+    # Find spouse
+    spouse = None
+    for key, value in relationships.items():
+        if key.startswith("married:"):
+            user_id = int(key.split(":")[1])
+            if user_id == user.id:
+                spouse = ctx.guild.get_member(value)
+                break
+            elif value == user.id:
+                spouse = ctx.guild.get_member(user_id)
+                break
+    
+    # Find children (people this user has adopted)
+    children = []
+    for key, value in relationships.items():
+        if key.startswith("adopted:"):
+            adopter_id = int(key.split(":")[1])
+            if adopter_id == user.id:
+                child = ctx.guild.get_member(value)
+                if child:
+                    children.append(child)
+    
+    # Find parents (people who adopted this user)
+    parents = []
+    for key, value in relationships.items():
+        if key.startswith("adopted:"):
+            if value == user.id:
+                adopter_id = int(key.split(":")[1])
+                parent = ctx.guild.get_member(adopter_id)
+                if parent:
+                    parents.append(parent)
+    
+    # Build family tree
+    tree = f"**fAMILY tREE fOR {user.display_name}**\n\n"
+    
+    if spouse:
+        tree += f"💍 **sPOUSE:** {spouse.display_name}\n"
+    else:
+        tree += "💍 **sPOUSE:** nONE\n"
+    
+    if children:
+        tree += f"👶 **cHILDREN:** {', '.join([child.display_name for child in children])}\n"
+    else:
+        tree += "👶 **cHILDREN:** nONE\n"
+    
+    if parents:
+        tree += f"👨‍👩‍👧‍👦 **pARENTS:** {', '.join([parent.display_name for parent in parents])}\n"
+    else:
+        tree += "👨‍👩‍👧‍👦 **pARENTS:** nONE\n"
+    
+    await ctx.send(embed=nova_embed("fAMILY tREE", tree))
+
+@bot.tree.command(name="familytree", description="Show family tree for a user")
+@app_commands.describe(user="The user to check (optional - shows your own)")
+async def familytree_slash(interaction: discord.Interaction, user: discord.Member = None):
+    user = user or interaction.user
+    relationships = load_relationships()
+    
+    # Find spouse
+    spouse = None
+    for key, value in relationships.items():
+        if key.startswith("married:"):
+            user_id = int(key.split(":")[1])
+            if user_id == user.id:
+                spouse = interaction.guild.get_member(value)
+                break
+            elif value == user.id:
+                spouse = interaction.guild.get_member(user_id)
+                break
+    
+    # Find children (people this user has adopted)
+    children = []
+    for key, value in relationships.items():
+        if key.startswith("adopted:"):
+            adopter_id = int(key.split(":")[1])
+            if adopter_id == user.id:
+                child = interaction.guild.get_member(value)
+                if child:
+                    children.append(child)
+    
+    # Find parents (people who adopted this user)
+    parents = []
+    for key, value in relationships.items():
+        if key.startswith("adopted:"):
+            if value == user.id:
+                adopter_id = int(key.split(":")[1])
+                parent = interaction.guild.get_member(adopter_id)
+                if parent:
+                    parents.append(parent)
+    
+    # Build family tree
+    tree = f"**fAMILY tREE fOR {user.display_name}**\n\n"
+    
+    if spouse:
+        tree += f"💍 **sPOUSE:** {spouse.display_name}\n"
+    else:
+        tree += "💍 **sPOUSE:** nONE\n"
+    
+    if children:
+        tree += f"👶 **cHILDREN:** {', '.join([child.display_name for child in children])}\n"
+    else:
+        tree += "👶 **cHILDREN:** nONE\n"
+    
+    if parents:
+        tree += f"👨‍👩‍👧‍👦 **pARENTS:** {', '.join([parent.display_name for parent in parents])}\n"
+    else:
+        tree += "👨‍👩‍👧‍👦 **pARENTS:** nONE\n"
+    
+    await interaction.response.send_message(embed=nova_embed("fAMILY tREE", tree))
+
+@bot.command()
+async def kiss(ctx, user: discord.Member):
+    if user.id == ctx.author.id:
+        await ctx.send(embed=nova_embed("kISS", "yOU cAN'T kISS yOURSELF!"))
+        return
+    responses = [
+        f"💋 {ctx.author.display_name} kISSES {user.display_name} gENTLY!",
+        f"😘 {ctx.author.display_name} gIVES {user.display_name} a sWEET kISS!",
+        f"💕 {ctx.author.display_name} pLANTS a kISS oN {user.display_name}'s cHEEK!",
+        f"🥰 {ctx.author.display_name} kISSES {user.display_name} pASSIONATELY!"
+    ]
+    await ctx.send(embed=nova_embed("kISS", random.choice(responses)))
+
+@bot.tree.command(name="kiss", description="Kiss a user (fun roleplay)")
+@app_commands.describe(user="The user to kiss")
+async def kiss_slash(interaction: discord.Interaction, user: discord.Member):
+    if user.id == interaction.user.id:
+        await interaction.response.send_message(embed=nova_embed("kISS", "yOU cAN'T kISS yOURSELF!"))
+        return
+    responses = [
+        f"💋 {interaction.user.display_name} kISSES {user.display_name} gENTLY!",
+        f"😘 {interaction.user.display_name} gIVES {user.display_name} a sWEET kISS!",
+        f"💕 {interaction.user.display_name} pLANTS a kISS oN {user.display_name}'s cHEEK!",
+        f"🥰 {interaction.user.display_name} kISSES {user.display_name} pASSIONATELY!"
+    ]
+    await interaction.response.send_message(embed=nova_embed("kISS", random.choice(responses)))
+
+@bot.command()
+async def slap(ctx, user: discord.Member):
+    if user.id == ctx.author.id:
+        await ctx.send(embed=nova_embed("sLAP", "yOU cAN'T sLAP yOURSELF!"))
+        return
+    responses = [
+        f"👋 {ctx.author.display_name} sLAPS {user.display_name} aCROSS tHE fACE!",
+        f"💥 {ctx.author.display_name} gIVES {user.display_name} a hARD sLAP!",
+        f"🤚 {ctx.author.display_name} sLAPS {user.display_name} wITH a tOWEL!",
+        f"💢 {ctx.author.display_name} sLAPS {user.display_name} fOR bEING nAUGHTY!"
+    ]
+    await ctx.send(embed=nova_embed("sLAP", random.choice(responses)))
+
+@bot.tree.command(name="slap", description="Slap a user (fun roleplay)")
+@app_commands.describe(user="The user to slap")
+async def slap_slash(interaction: discord.Interaction, user: discord.Member):
+    if user.id == interaction.user.id:
+        await interaction.response.send_message(embed=nova_embed("sLAP", "yOU cAN'T sLAP yOURSELF!"))
+        return
+    responses = [
+        f"👋 {interaction.user.display_name} sLAPS {user.display_name} aCROSS tHE fACE!",
+        f"💥 {interaction.user.display_name} gIVES {user.display_name} a hARD sLAP!",
+        f"🤚 {interaction.user.display_name} sLAPS {user.display_name} wITH a tOWEL!",
+        f"💢 {interaction.user.display_name} sLAPS {user.display_name} fOR bEING nAUGHTY!"
+    ]
+    await interaction.response.send_message(embed=nova_embed("sLAP", random.choice(responses)))
+
+@bot.command()
+async def whoasked(ctx, user: discord.Member = None):
+    if not user:
+        await ctx.send(embed=nova_embed("wHO aSKED", "nOBODY aSKED fOR yOUR oPINION!"))
+        return
+    responses = [
+        f"🤔 wHO aSKED {user.display_name}?",
+        f"❓ dID aNYONE aSK {user.display_name}?",
+        f"🤷‍♀️ nOBODY aSKED {user.display_name}!",
+        f"🙄 wHO eVEN aSKED {user.display_name}?"
+    ]
+    await ctx.send(embed=nova_embed("wHO aSKED", random.choice(responses)))
+
+@bot.tree.command(name="whoasked", description="Ask who asked for someone's opinion")
+@app_commands.describe(user="The user to question (optional)")
+async def whoasked_slash(interaction: discord.Interaction, user: discord.Member = None):
+    if not user:
+        await interaction.response.send_message(embed=nova_embed("wHO aSKED", "nOBODY aSKED fOR yOUR oPINION!"))
+        return
+    responses = [
+        f"🤔 wHO aSKED {user.display_name}?",
+        f"❓ dID aNYONE aSK {user.display_name}?",
+        f"🤷‍♀️ nOBODY aSKED {user.display_name}!",
+        f"🙄 wHO eVEN aSKED {user.display_name}?"
+    ]
+    await interaction.response.send_message(embed=nova_embed("wHO aSKED", random.choice(responses)))
+
+@bot.command()
+async def voguebattle(ctx, user: discord.Member):
+    if user.id == ctx.author.id:
+        await ctx.send(embed=nova_embed("vOGUE bATTLE", "yOU cAN'T bATTLE yOURSELF!"))
+        return
+    
+    # Vogue battle moves
+    moves = [
+        "DUCK WALK",
+        "DEATH DROP", 
+        "HAND PERFORMANCE",
+        "CATWALK",
+        "FACE",
+        "LIPSYNC",
+        "SHABLAM",
+        "FIERCE POSE",
+        "DIAMOND POSE",
+        "STAR POSE"
+    ]
+    
+    # Battle results
+    results = [
+        f"🏆 **{ctx.author.display_name}** WINS THE VOGUE BATTLE! {user.display_name} COULDN'T HANDLE THE FIERCENESS!",
+        f"💀 **{user.display_name}** DESTROYS {ctx.author.display_name} IN THE BATTLE! TOTAL ANNIHILATION!",
+        f"🤝 IT'S A TIE! BOTH **{ctx.author.display_name}** AND **{user.display_name}** ARE EQUALLY FIERCE!",
+        f"🔥 **{ctx.author.display_name}** SERVES FACE AND WINS! {user.display_name} IS SHOOK!",
+        f"💅 **{user.display_name}** TURNS IT OUT AND WINS! {ctx.author.display_name} IS GAGGED!"
+    ]
+    
+    # Random moves for both users
+    author_move = random.choice(moves)
+    opponent_move = random.choice(moves)
+    
+    # Determine winner (random with slight bias to author)
+    winner = random.choice(results)
+    
+    battle_text = f"**VOGUE BATTLE: {ctx.author.display_name} vs {user.display_name}**\n\n"
+    battle_text += f"💃 **{ctx.author.display_name}**: {author_move}\n"
+    battle_text += f"🕺 **{user.display_name}**: {opponent_move}\n\n"
+    battle_text += f"**RESULT:** {winner}"
+    
+    await ctx.send(embed=nova_embed("vOGUE bATTLE", battle_text))
+
+@bot.tree.command(name="voguebattle", description="Start a vogue battle with another user")
+@app_commands.describe(user="The user to battle")
+async def voguebattle_slash(interaction: discord.Interaction, user: discord.Member):
+    if user.id == interaction.user.id:
+        await interaction.response.send_message(embed=nova_embed("vOGUE bATTLE", "yOU cAN'T bATTLE yOURSELF!"))
+        return
+    
+    # Vogue battle moves
+    moves = [
+        "DUCK WALK",
+        "DEATH DROP", 
+        "HAND PERFORMANCE",
+        "CATWALK",
+        "FACE",
+        "LIPSYNC",
+        "SHABLAM",
+        "FIERCE POSE",
+        "DIAMOND POSE",
+        "STAR POSE"
+    ]
+    
+    # Battle results
+    results = [
+        f"🏆 **{interaction.user.display_name}** WINS THE VOGUE BATTLE! {user.display_name} COULDN'T HANDLE THE FIERCENESS!",
+        f"💀 **{user.display_name}** DESTROYS {interaction.user.display_name} IN THE BATTLE! TOTAL ANNIHILATION!",
+        f"🤝 IT'S A TIE! BOTH **{interaction.user.display_name}** AND **{user.display_name}** ARE EQUALLY FIERCE!",
+        f"🔥 **{interaction.user.display_name}** SERVES FACE AND WINS! {user.display_name} IS SHOOK!",
+        f"💅 **{user.display_name}** TURNS IT OUT AND WINS! {interaction.user.display_name} IS GAGGED!"
+    ]
+    
+    # Random moves for both users
+    author_move = random.choice(moves)
+    opponent_move = random.choice(moves)
+    
+    # Determine winner (random with slight bias to author)
+    winner = random.choice(results)
+    
+    battle_text = f"**VOGUE BATTLE: {interaction.user.display_name} vs {user.display_name}**\n\n"
+    battle_text += f"💃 **{interaction.user.display_name}**: {author_move}\n"
+    battle_text += f"🕺 **{user.display_name}**: {opponent_move}\n\n"
+    battle_text += f"**RESULT:** {winner}"
+    
+    await interaction.response.send_message(embed=nova_embed("vOGUE BATTLE", battle_text))
+@bot.command()
+async def lock(ctx):
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("lOCK", "yOU dON'T hAVE pERMISSION!"))
+        return
+    try:
+        await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
+        await ctx.send(embed=nova_embed("lOCK", f"🔒 {ctx.channel.mention} hAS bEEN lOCKED!"))
+    except Exception:
+        await ctx.send(embed=nova_embed("lOCK", "cOULD nOT lOCK tHE cHANNEL!"))
+
+@bot.tree.command(name="lock", description="Lock the current channel (mods only)")
+async def lock_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message(embed=nova_embed("lOCK", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    try:
+        await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)
+        await interaction.response.send_message(embed=nova_embed("lOCK", f"🔒 {interaction.channel.mention} hAS bEEN lOCKED!"))
+    except Exception:
+        await interaction.response.send_message(embed=nova_embed("lOCK", "cOULD nOT lOCK tHE cHANNEL!"), ephemeral=True)
+
+@bot.command()
+async def unlock(ctx):
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("uNLOCK", "yOU dON'T hAVE pERMISSION!"))
+        return
+    try:
+        await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=None)
+        await ctx.send(embed=nova_embed("uNLOCK", f"🔓 {ctx.channel.mention} hAS bEEN uNLOCKED!"))
+    except Exception:
+        await ctx.send(embed=nova_embed("uNLOCK", "cOULD nOT uNLOCK tHE cHANNEL!"))
+
+@bot.tree.command(name="unlock", description="Unlock the current channel (mods only)")
+async def unlock_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message(embed=nova_embed("uNLOCK", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    try:
+        await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=None)
+        await interaction.response.send_message(embed=nova_embed("uNLOCK", f"🔓 {interaction.channel.mention} hAS bEEN uNLOCKED!"))
+    except Exception:
+        await interaction.response.send_message(embed=nova_embed("uNLOCK", "cOULD nOT uNLOCK tHE cHANNEL!"), ephemeral=True)
+
 # AFK
 AFK_STATUS = {}  # user_id: {"reason": str, "since": datetime, "mentions": set(user_id)}
+
+# Pending adoptions
+pending_adoptions = {}  # user_id: adopter_id
 
 @bot.command()
 async def afk(ctx, *, reason: str = "aFK"): 
@@ -1831,6 +2278,95 @@ async def setjail_slash(interaction: discord.Interaction, channel: discord.TextC
     await interaction.response.send_message(embed=nova_embed("sET jAIL", f"jAIL cHANNEL sET tO {channel.mention}"), ephemeral=True)
 
 @bot.command()
+async def setrunway(ctx, channel: discord.TextChannel):
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("sET rUNWAY", "yOU dON'T hAVE pERMISSION!"))
+        return
+    global RUNWAY_CHANNEL_ID
+    RUNWAY_CHANNEL_ID = channel.id
+    await ctx.send(embed=nova_embed("sET rUNWAY", f"rUNWAY cHANNEL sET tO {channel.mention}!"))
+
+@bot.tree.command(name="setrunway", description="Set the runway channel (admin/mod only)")
+@app_commands.describe(channel="The channel to use as runway")
+async def setrunway_slash(interaction: discord.Interaction, channel: discord.TextChannel):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message(embed=nova_embed("sET rUNWAY", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    global RUNWAY_CHANNEL_ID
+    RUNWAY_CHANNEL_ID = channel.id
+    await interaction.response.send_message(embed=nova_embed("sET rUNWAY", f"rUNWAY cHANNEL sET tO {channel.mention}!"), ephemeral=True)
+
+@bot.command()
+async def fixinmate(ctx):
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("fIX iNMATE", "yOU dON'T hAVE pERMISSION!"))
+        return
+    try:
+        inmate_role = discord.utils.get(ctx.guild.roles, name="iNMATE")
+        if not inmate_role:
+            await ctx.send(embed=nova_embed("fIX iNMATE", "iNMATE rOLE dOES nOT eXIST!"))
+            return
+        
+        # Force update permissions for all channels
+        updated_channels = 0
+        for channel in ctx.guild.channels:
+            if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                try:
+                    await channel.set_permissions(inmate_role, 
+                        send_messages=False, 
+                        speak=False, 
+                        add_reactions=False,
+                        create_public_threads=False,
+                        create_private_threads=False,
+                        send_messages_in_threads=False,
+                        view_channel=True,
+                        read_message_history=True
+                    )
+                    updated_channels += 1
+                except discord.Forbidden:
+                    continue
+        
+        await ctx.send(embed=nova_embed("fIX iNMATE", f"uPDATED pERMISSIONS fOR {updated_channels} cHANNELS!"))
+    except Exception as e:
+        await ctx.send(embed=nova_embed("fIX iNMATE", f"eRROR: {str(e)}"))
+
+@bot.tree.command(name="fixinmate", description="Fix inmate role permissions for all channels (admin/mod only)")
+async def fixinmate_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message(embed=nova_embed("fIX iNMATE", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    try:
+        inmate_role = discord.utils.get(interaction.guild.roles, name="iNMATE")
+        if not inmate_role:
+            await interaction.response.send_message(embed=nova_embed("fIX iNMATE", "iNMATE rOLE dOES nOT eXIST!"), ephemeral=True)
+            return
+        
+        # Force update permissions for all channels
+        updated_channels = 0
+        for channel in interaction.guild.channels:
+            if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                try:
+                    await channel.set_permissions(inmate_role, 
+                        send_messages=False, 
+                        speak=False, 
+                        add_reactions=False,
+                        create_public_threads=False,
+                        create_private_threads=False,
+                        send_messages_in_threads=False,
+                        view_channel=True,
+                        read_message_history=True
+                    )
+                    updated_channels += 1
+                except discord.Forbidden:
+                    continue
+        
+        await interaction.response.send_message(embed=nova_embed("fIX iNMATE", f"uPDATED pERMISSIONS fOR {updated_channels} cHANNELS!"), ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(embed=nova_embed("fIX iNMATE", f"eRROR: {str(e)}"), ephemeral=True)
+
+@bot.command()
 async def jail(ctx, user: discord.Member):
     if not has_mod_or_admin(ctx):
         await ctx.send(embed=nova_embed("jAIL", "yOU dON'T hAVE pERMISSION!"))
@@ -1843,12 +2379,71 @@ async def jail(ctx, user: discord.Member):
         if not jail_channel:
             await ctx.send(embed=nova_embed("jAIL", "cOULD nOT fIND tHE jAIL cHANNEL!"))
             return
-        await user.move_to(jail_channel) if hasattr(user, 'move_to') else None
-        overwrite = discord.PermissionOverwrite(send_messages=False, speak=False)
-        await jail_channel.set_permissions(user, overwrite=overwrite)
-        await ctx.send(embed=nova_embed("jAIL", f"{user.mention} hAS bEEN jAILED!"))
-    except Exception:
-        await ctx.send(embed=nova_embed("jAIL", "cOULD nOT jAIL tHAT uSER!"))
+        
+        # Create or get inmate role
+        inmate_role = discord.utils.get(ctx.guild.roles, name="iNMATE")
+        if not inmate_role:
+            try:
+                inmate_role = await ctx.guild.create_role(
+                    name="iNMATE",
+                    color=discord.Color.dark_red(),
+                    reason="Jail system role"
+                )
+                # Set permissions for all channels
+                for channel in ctx.guild.channels:
+                    if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                        try:
+                            await channel.set_permissions(inmate_role, 
+                                send_messages=False, 
+                                speak=False, 
+                                add_reactions=False,
+                                create_public_threads=False,
+                                create_private_threads=False,
+                                send_messages_in_threads=False,
+                                view_channel=True,
+                                read_message_history=True
+                            )
+                        except discord.Forbidden:
+                            continue  # Skip channels we can't modify
+            except discord.Forbidden:
+                await ctx.send(embed=nova_embed("jAIL", "cAN'T cREATE iNMATE rOLE - nO pERMISSION!"))
+                return
+        else:
+            # If role exists, make sure permissions are set correctly
+            for channel in ctx.guild.channels:
+                if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                    try:
+                        await channel.set_permissions(inmate_role, 
+                            send_messages=False, 
+                            speak=False, 
+                            add_reactions=False,
+                            create_public_threads=False,
+                            create_private_threads=False,
+                            send_messages_in_threads=False,
+                            view_channel=True,
+                            read_message_history=True
+                        )
+                    except discord.Forbidden:
+                        continue  # Skip channels we can't modify
+        
+        # Add inmate role to user
+        if inmate_role not in user.roles:
+            await user.add_roles(inmate_role, reason="Jailed by Nova")
+        
+        # Try to move user to jail channel if they're in voice
+        if user.voice:
+            try:
+                await user.move_to(jail_channel)
+            except discord.Forbidden:
+                pass  # Don't fail if we can't move them
+            except Exception:
+                pass  # Don't fail if we can't move them
+        
+        await ctx.send(embed=nova_embed("jAIL", f"{user.mention} hAS bEEN jAILED! tHEY cAN'T tALK aNYWHERE nOW!"))
+    except discord.Forbidden:
+        await ctx.send(embed=nova_embed("jAIL", "nO pERMISSION tO mANAGE rOLES oR cHANNELS!"))
+    except Exception as e:
+        await ctx.send(embed=nova_embed("jAIL", f"eRROR: {str(e)}"))
 
 @bot.tree.command(name="jail", description="Move a user to the jail channel and restrict permissions (admin/mod only)")
 @app_commands.describe(user="The user to jail")
@@ -1865,12 +2460,173 @@ async def jail_slash(interaction: discord.Interaction, user: discord.Member):
         if not jail_channel:
             await interaction.response.send_message(embed=nova_embed("jAIL", "cOULD nOT fIND tHE jAIL cHANNEL!"), ephemeral=True)
             return
-        await user.move_to(jail_channel) if hasattr(user, 'move_to') else None
-        overwrite = discord.PermissionOverwrite(send_messages=False, speak=False)
-        await jail_channel.set_permissions(user, overwrite=overwrite)
-        await interaction.response.send_message(embed=nova_embed("jAIL", f"{user.mention} hAS bEEN jAILED!"))
-    except Exception:
-        await interaction.response.send_message(embed=nova_embed("jAIL", "cOULD nOT jAIL tHAT uSER!"), ephemeral=True)
+        
+        # Create or get inmate role
+        inmate_role = discord.utils.get(interaction.guild.roles, name="iNMATE")
+        if not inmate_role:
+            try:
+                inmate_role = await interaction.guild.create_role(
+                    name="iNMATE",
+                    color=discord.Color.dark_red(),
+                    reason="Jail system role"
+                )
+                # Set permissions for all channels
+                for channel in interaction.guild.channels:
+                    if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                        try:
+                            await channel.set_permissions(inmate_role, 
+                                send_messages=False, 
+                                speak=False, 
+                                add_reactions=False,
+                                create_public_threads=False,
+                                create_private_threads=False,
+                                send_messages_in_threads=False,
+                                view_channel=True,
+                                read_message_history=True
+                            )
+                        except discord.Forbidden:
+                            continue  # Skip channels we can't modify
+            except discord.Forbidden:
+                await interaction.response.send_message(embed=nova_embed("jAIL", "cAN'T cREATE iNMATE rOLE - nO pERMISSION!"), ephemeral=True)
+                return
+        else:
+            # If role exists, make sure permissions are set correctly
+            for channel in interaction.guild.channels:
+                if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                    try:
+                        await channel.set_permissions(inmate_role, 
+                            send_messages=False, 
+                            speak=False, 
+                            add_reactions=False,
+                            create_public_threads=False,
+                            create_private_threads=False,
+                            send_messages_in_threads=False,
+                            view_channel=True,
+                            read_message_history=True
+                        )
+                    except discord.Forbidden:
+                        continue  # Skip channels we can't modify
+        
+        # Add inmate role to user
+        if inmate_role not in user.roles:
+            await user.add_roles(inmate_role, reason="Jailed by Nova")
+        
+        # Try to move user to jail channel if they're in voice
+        if user.voice:
+            try:
+                await user.move_to(jail_channel)
+            except discord.Forbidden:
+                pass  # Don't fail if we can't move them
+            except Exception:
+                pass  # Don't fail if we can't move them
+        
+        await interaction.response.send_message(embed=nova_embed("jAIL", f"{user.mention} hAS bEEN jAILED! tHEY cAN'T tALK aNYWHERE nOW!"))
+    except discord.Forbidden:
+        await interaction.response.send_message(embed=nova_embed("jAIL", "nO pERMISSION tO mANAGE rOLES oR cHANNELS!"), ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(embed=nova_embed("jAIL", f"eRROR: {str(e)}"), ephemeral=True)
+
+@bot.command()
+async def runway(ctx, message_id: int = None):
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("rUNWAY", "yOU dON'T hAVE pERMISSION!"))
+        return
+    if RUNWAY_CHANNEL_ID is None:
+        await ctx.send(embed=nova_embed("rUNWAY", "rUNWAY cHANNEL nOT sET!"))
+        return
+    
+    # Get the message to transfer
+    if message_id:
+        try:
+            message = await ctx.channel.fetch_message(message_id)
+        except discord.NotFound:
+            await ctx.send(embed=nova_embed("rUNWAY", "mESSAGE nOT fOUND!"))
+            return
+        except discord.Forbidden:
+            await ctx.send(embed=nova_embed("rUNWAY", "cAN'T aCCESS tHAT mESSAGE!"))
+            return
+    else:
+        # Get the last message in the channel
+        async for message in ctx.channel.history(limit=1):
+            break
+        else:
+            await ctx.send(embed=nova_embed("rUNWAY", "nO mESSAGES tO tRANSFER!"))
+            return
+    
+    try:
+        runway_channel = ctx.guild.get_channel(RUNWAY_CHANNEL_ID)
+        if not runway_channel:
+            await ctx.send(embed=nova_embed("rUNWAY", "cOULD nOT fIND tHE rUNWAY cHANNEL!"))
+            return
+        
+        # Create runway embed
+        embed = nova_embed("rUNWAY", message.content)
+        embed.set_author(name=message.author.display_name, icon_url=message.author.avatar.url if message.author.avatar else None)
+        embed.add_field(name="oRIGINAL cHANNEL", value=ctx.channel.mention, inline=True)
+        embed.add_field(name="tRANSFERRED bY", value=ctx.author.mention, inline=True)
+        embed.set_footer(text=f"Message ID: {message.id}")
+        
+        # Add attachments if any
+        if message.attachments:
+            embed.add_field(name="aTTACHMENTS", value=f"{len(message.attachments)} file(s)", inline=False)
+        
+        await runway_channel.send(embed=embed)
+        await ctx.send(embed=nova_embed("rUNWAY", f"mESSAGE tRANSFERRED tO {runway_channel.mention}!"))
+        
+    except Exception as e:
+        await ctx.send(embed=nova_embed("rUNWAY", f"eRROR: {str(e)}"))
+
+@bot.tree.command(name="runway", description="Transfer a message to the runway channel (admin/mod only)")
+@app_commands.describe(message_id="ID of the message to transfer (optional - uses last message)")
+async def runway_slash(interaction: discord.Interaction, message_id: int = None):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message(embed=nova_embed("rUNWAY", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    if RUNWAY_CHANNEL_ID is None:
+        await interaction.response.send_message(embed=nova_embed("rUNWAY", "rUNWAY cHANNEL nOT sET!"), ephemeral=True)
+        return
+    
+    # Get the message to transfer
+    if message_id:
+        try:
+            message = await interaction.channel.fetch_message(message_id)
+        except discord.NotFound:
+            await interaction.response.send_message(embed=nova_embed("rUNWAY", "mESSAGE nOT fOUND!"), ephemeral=True)
+            return
+        except discord.Forbidden:
+            await interaction.response.send_message(embed=nova_embed("rUNWAY", "cAN'T aCCESS tHAT mESSAGE!"), ephemeral=True)
+            return
+    else:
+        # Get the last message in the channel
+        async for message in interaction.channel.history(limit=1):
+            break
+        else:
+            await interaction.response.send_message(embed=nova_embed("rUNWAY", "nO mESSAGES tO tRANSFER!"), ephemeral=True)
+            return
+    
+    try:
+        runway_channel = interaction.guild.get_channel(RUNWAY_CHANNEL_ID)
+        if not runway_channel:
+            await interaction.response.send_message(embed=nova_embed("rUNWAY", "cOULD nOT fIND tHE rUNWAY cHANNEL!"), ephemeral=True)
+            return
+        
+        # Create runway embed
+        embed = nova_embed("rUNWAY", message.content)
+        embed.set_author(name=message.author.display_name, icon_url=message.author.avatar.url if message.author.avatar else None)
+        embed.add_field(name="oRIGINAL cHANNEL", value=interaction.channel.mention, inline=True)
+        embed.add_field(name="tRANSFERRED bY", value=interaction.user.mention, inline=True)
+        embed.set_footer(text=f"Message ID: {message.id}")
+        
+        # Add attachments if any
+        if message.attachments:
+            embed.add_field(name="aTTACHMENTS", value=f"{len(message.attachments)} file(s)", inline=False)
+        
+        await runway_channel.send(embed=embed)
+        await interaction.response.send_message(embed=nova_embed("rUNWAY", f"mESSAGE tRANSFERRED tO {runway_channel.mention}!"), ephemeral=True)
+        
+    except Exception as e:
+        await interaction.response.send_message(embed=nova_embed("rUNWAY", f"eRROR: {str(e)}"), ephemeral=True)
 
 @bot.command()
 async def setautoplay(ctx, channel: discord.VoiceChannel):
@@ -1950,18 +2706,18 @@ async def unjail(ctx, user: discord.Member):
     if not has_mod_or_admin(ctx):
         await ctx.send(embed=nova_embed("uNJAIL", "yOU dON'T hAVE pERMISSION!"))
         return
-    if JAIL_CHANNEL_ID is None:
-        await ctx.send(embed=nova_embed("uNJAIL", "jAIL cHANNEL nOT sET!"))
-        return
     try:
-        jail_channel = ctx.guild.get_channel(JAIL_CHANNEL_ID)
-        if not jail_channel:
-            await ctx.send(embed=nova_embed("uNJAIL", "cOULD nOT fIND tHE jAIL cHANNEL!"))
-            return
-        await jail_channel.set_permissions(user, overwrite=None)
-        await ctx.send(embed=nova_embed("uNJAIL", f"{user.mention} hAS bEEN uNJAILed!"))
-    except Exception:
-        await ctx.send(embed=nova_embed("uNJAIL", "cOULD nOT uNJAIL tHAT uSER!"))
+        # Remove inmate role
+        inmate_role = discord.utils.get(ctx.guild.roles, name="iNMATE")
+        if inmate_role and inmate_role in user.roles:
+            await user.remove_roles(inmate_role, reason="Unjailed by Nova")
+            await ctx.send(embed=nova_embed("uNJAIL", f"{user.mention} hAS bEEN uNJAILed!"))
+        else:
+            await ctx.send(embed=nova_embed("uNJAIL", f"{user.mention} iS nOT jAILED!"))
+    except discord.Forbidden:
+        await ctx.send(embed=nova_embed("uNJAIL", "nO pERMISSION tO mANAGE rOLES!"))
+    except Exception as e:
+        await ctx.send(embed=nova_embed("uNJAIL", f"eRROR: {str(e)}"))
 
 @bot.tree.command(name="unjail", description="Remove a user from jail (admin/mod only)")
 @app_commands.describe(user="The user to unjail")
@@ -1970,18 +2726,18 @@ async def unjail_slash(interaction: discord.Interaction, user: discord.Member):
     if not has_mod_or_admin(ctx):
         await interaction.response.send_message(embed=nova_embed("uNJAIL", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
         return
-    if JAIL_CHANNEL_ID is None:
-        await interaction.response.send_message(embed=nova_embed("uNJAIL", "jAIL cHANNEL nOT sET!"), ephemeral=True)
-        return
     try:
-        jail_channel = interaction.guild.get_channel(JAIL_CHANNEL_ID)
-        if not jail_channel:
-            await interaction.response.send_message(embed=nova_embed("uNJAIL", "cOULD nOT fIND tHE jAIL cHANNEL!"), ephemeral=True)
-            return
-        await jail_channel.set_permissions(user, overwrite=None)
-        await interaction.response.send_message(embed=nova_embed("uNJAIL", f"{user.mention} hAS bEEN uNJAILed!"))
-    except Exception:
-        await interaction.response.send_message(embed=nova_embed("uNJAIL", "cOULD nOT uNJAIL tHAT uSER!"), ephemeral=True)
+        # Remove inmate role
+        inmate_role = discord.utils.get(interaction.guild.roles, name="iNMATE")
+        if inmate_role and inmate_role in user.roles:
+            await user.remove_roles(inmate_role, reason="Unjailed by Nova")
+            await interaction.response.send_message(embed=nova_embed("uNJAIL", f"{user.mention} hAS bEEN uNJAILed!"))
+        else:
+            await interaction.response.send_message(embed=nova_embed("uNJAIL", f"{user.mention} iS nOT jAILED!"), ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message(embed=nova_embed("uNJAIL", "nO pERMISSION tO mANAGE rOLES!"), ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(embed=nova_embed("uNJAIL", f"eRROR: {str(e)}"), ephemeral=True)
 
 SHOP_ITEMS = {
     "cUSTOM rOLE": 5000,
