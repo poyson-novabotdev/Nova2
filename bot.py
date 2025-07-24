@@ -13,7 +13,9 @@ import time
 import requests
 import re
 import asyncio
+import io
 from discord.ui import View, Button
+import functools
 
 # =========================
 # Intents and Bot Instance
@@ -46,6 +48,9 @@ work_cooldowns = {}
 daily_cooldowns = {}
 
 OWNER_ID = 755846396208218174
+
+# Server restriction - Set to your server ID
+ALLOWED_SERVER_ID = 1390109232677785674  # Your server ID
 
 ROLE_MESSAGE_ID = None
 EMOJI_TO_ROLE = {
@@ -80,9 +85,6 @@ INTERNATIONAL_DAYS = {
     "17-02": "gLOBAL tOURISM rESILIENCE dAY",
     "20-02": "wORLD dAY oF sOCIAL jUSTICE",
     "21-02": "iNTERNATIONAL mOTHER lANGUAGE dAY",
-}
-
-INTERNATIONAL_DAYS.update({
     "01-03": "zERO dISCRIMINATION dAY",
     "03-03": "wORLD wILDLIFE dAY",
     "05-03": "iNTERNATIONAL dAY fOR dISARMAMENT aND nON-pROLIFERATION aWARENESS",
@@ -91,39 +93,25 @@ INTERNATIONAL_DAYS.update({
     "15-03": "iNTERNATIONAL dAY tO cOMBAT iSLAMOPHOBIA",
     "20-03": "iNTERNATIONAL dAY oF hAPPINESS",
     "21-03": "wORLD dAY fOR gLACIERS",
-    "21-03": "iNTERNATIONAL dAY fOR tHE eLIMINATION oF rACIAL dISCRIMINATION",
-    "21-03": "iNTERNATIONAL dAY oF fORESTS",
-    "21-03": "wORLD pOETRY dAY",
-    "21-03": "iNTERNATIONAL dAY oF nOWRUZ",
-    "21-03": "wORLD dOWN sYNDROME dAY",
     "22-03": "wORLD wATER dAY",
     "23-03": "wORLD mETEOROLOGICAL dAY",
     "24-03": "wORLD tUBERCULOSIS dAY",
-    "24-03": "iNTERNATIONAL dAY fOR tHE rIGHT tO tHE tRUTH cONCERNING gROSS hUMAN rIGHTS vIOLATIONS aND fOR tHE dIGNITY oF vICTIMS",
     "25-03": "iNTERNATIONAL dAY oF rEMEMBRANCE oF tHE vICTIMS oF sLAVERY aND tHE tRANSATLANTIC sLAVE tRADE",
-    "25-03": "iNTERNATIONAL dAY oF sOLIDARITY wITH dETAINED aND mISSING sTAFF mEMBERS",
     "30-03": "iNTERNATIONAL dAY oF zERO wASTE",
     "02-04": "wORLD aUTISM aWARENESS dAY",
     "04-04": "iNTERNATIONAL dAY fOR mINE aWARENESS aND aSSISTANCE iN mINE aCTION",
     "05-04": "iNTERNATIONAL dAY oF cONSCIENCE",
     "06-04": "iNTERNATIONAL dAY oF sPORT fOR dEVELOPMENT aND pEACE",
     "07-04": "wORLD hEALTH dAY",
-    "07-04": "iNTERNATIONAL dAY oF rEFLECTION oN tHE 1994 gENOCIDE aGAINST tHE tUTSI iN rWANDA",
     "12-04": "iNTERNATIONAL dAY oF hUMAN sPACE fLIGHT",
     "14-04": "wORLD cHAGAS dISEASE dAY",
     "20-04": "cHINESE lANGUAGE dAY",
     "21-04": "wORLD cREATIVITY aND iNNOVATION dAY",
     "22-04": "iNTERNATIONAL mOTHER eARTH dAY",
     "23-04": "wORLD bOOK aND cOPYRIGHT dAY",
-    "23-04": "eNGLISH lANGUAGE dAY",
-    "23-04": "sPANISH lANGUAGE dAY",
     "24-04": "iNTERNATIONAL gIRLS iN iCT dAY",
-    "24-04": "wORLD iMMUNIZATION wEEK",
-    "24-04": "iNTERNATIONAL dAY oF mULTILATERALISM aND dIPLOMACY fOR pEACE",
     "25-04": "wORLD mALARIA dAY",
-    "25-04": "iNTERNATIONAL dELEGATE'S dAY",
     "26-04": "iNTERNATIONAL cHERNOBYL dISASTER rEMEMBRANCE dAY",
-    "26-04": "wORLD iNTELLECTUAL pROPERTY dAY",
     "28-04": "wORLD dAY fOR sAFETY aND hEALTH aT wORK",
     "29-04": "iNTERNATIONAL dAY iN mEMORY oF tHE vICTIMS oF eARTHQUAKES",
     "30-04": "iNTERNATIONAL jAZZ dAY",
@@ -132,14 +120,9 @@ INTERNATIONAL_DAYS.update({
     "05-05": "wORLD pORTUGUESE lANGUAGE dAY",
     "08-05": "tIME oF rEMEMBRANCE aND rECONCILIATION fOR tHOSE wHO lOST tHEIR lIVES dURING tHE sECOND wORLD wAR",
     "10-05": "iNTERNATIONAL dAY oF aRGANIA",
-    "10-05": "wORLD mIGRATORY bIRD dAY",
-    "10-05": "iNTERNATIONAL dAY oF pLANT hEALTH",
     "12-05": "uN gLOBAL rOAD sAFETY wEEK",
-    "12-05": "vESAK, tHE dAY oF tHE fULL mOON",
-    "12-05": "iNTERNATIONAL dAY oF fAMILIES",
     "15-05": "iNTERNATIONAL dAY oF lIVING tOGETHER iN pEACE",
     "16-05": "iNTERNATIONAL dAY oF lIGHT",
-    "16-05": "wORLD tELECOMMUNICATION aND iNFORMATION sOCIETY dAY",
     "17-05": "wORLD fAIR pLAY dAY",
     "19-05": "wORLD bEE dAY",
     "20-05": "iNTERNATIONAL tEA dAY",
@@ -148,7 +131,6 @@ INTERNATIONAL_DAYS.update({
     "23-05": "iNTERNATIONAL dAY tO eND oBSTETRIC fISTULA",
     "24-05": "iNTERNATIONAL dAY oF tHE mARKHOR",
     "25-05": "wORLD fOOTBALL dAY",
-    "25-05": "wEEK oF sOLIDARITY wITH tHE pEOPLES oF nON-sELF-gOVERNING tERRITORIES",
     "29-05": "iNTERNATIONAL dAY oF uN pEACEKEEPERS",
     "30-05": "iNTERNATIONAL dAY oF pOTATO",
     "31-05": "wORLD nO-tOBACCO dAY",
@@ -156,7 +138,6 @@ INTERNATIONAL_DAYS.update({
     "03-06": "wORLD bICYCLE dAY",
     "04-06": "iNTERNATIONAL dAY oF iNNOCENT cHILDREN vICTIMS oF aGGRESSION",
     "05-06": "wORLD eNVIRONMENT dAY",
-    "05-06": "iNTERNATIONAL dAY fOR tHE fIGHT aGAINST iLLEGAL, uNREPORTED aND uNREGULATED fISHING",
     "06-06": "rUSSIAN lANGUAGE dAY",
     "07-06": "wORLD fOOD sAFETY dAY",
     "08-06": "wORLD oCEANS dAY",
@@ -169,40 +150,27 @@ INTERNATIONAL_DAYS.update({
     "16-06": "iNTERNATIONAL dAY oF fAMILY rEMITTANCES",
     "17-06": "wORLD dAY tO cOMBAT dESERTIFICATION aND dROUGHT",
     "18-06": "sUSTAINABLE gASTRONOMY dAY",
-    "18-06": "iNTERNATIONAL dAY fOR cOUNTERING hATE sPEECH",
     "19-06": "iNTERNATIONAL dAY fOR tHE eLIMINATION oF sEXUAL vIOLENCE iN cONFLICT",
     "20-06": "wORLD rEFUGEE dAY",
     "21-06": "iNTERNATIONAL dAY oF yOGA",
-    "21-06": "iNTERNATIONAL dAY oF tHE cELEBRATION oF tHE sOLSTICE",
     "23-06": "uN pUBLIC sERVICE dAY",
-    "23-06": "iNTERNATIONAL wIDOWS' dAY",
     "24-06": "iNTERNATIONAL dAY oF wOMEN iN dIPLOMACY",
     "25-06": "dAY oF tHE sEAFARER",
     "26-06": "iNTERNATIONAL dAY aGAINST dRUG aBUSE aND iLLICIT tRAFFICKING",
-    "26-06": "uN iNTERNATIONAL dAY iN sUPPORT oF vICTIMS oF tORTURE",
     "27-06": "iNTERNATIONAL dAY oF dEAFBLINDNESS",
-    "27-06": "mICRO-, sMALL aND mEDIUM-sIZED eNTERPRISES dAY",
     "29-06": "iNTERNATIONAL dAY oF tHE tROPICS",
     "30-06": "iNTERNATIONAL aSTEROID dAY",
-    "30-06": "iNTERNATIONAL dAY oF pARLIAMENTARISM",
     "05-07": "iNTERNATIONAL dAY oF cOOPERATIVES",
     "06-07": "wORLD rURAL dEVELOPMENT dAY",
     "07-07": "wORLD kISWAHILI lANGUAGE dAY",
     "11-07": "wORLD hORSE dAY",
-    "11-07": "iNTERNATIONAL dAY oF rEFLECTION aND cOMMEMORATION oF tHE 1995 gENOCIDE iN sREBRENICA",
-    "11-07": "wORLD pOPULATION dAY",
     "12-07": "iNTERNATIONAL dAY oF cOMbATING sAND aND dUST sTORMS",
-    "12-07": "iNTERNATIONAL dAY oF hOPE",
-    "12-07": "wORLD yOUTH sKILLS dAY",
     "15-07": "nELSON mANDELA iNTERNATIONAL dAY",
     "18-07": "wORLD cHESS dAY",
     "20-07": "iNTERNATIONAL mOON dAY",
-    "20-07": "iNTERNATIONAL dAY oF wOMEN aND gIRLS oF aFRICAN dESCENT",
     "25-07": "wORLD dROWNING pREVENTION dAY",
-    "25-07": "iNTERNATIONAL dAY oN jUDICIAL wELL-bEING",
     "28-07": "wORLD hEPATITIS dAY",
     "30-07": "iNTERNATIONAL dAY oF fRIENDSHIP",
-    "30-07": "wORLD dAY aGAINST tRAFFICKING iN pERSONS",
     "01-08": "wORLD bREASTFEEDING wEEK",
     "09-08": "iNTERNATIONAL dAY oF tHE wORLD'S iNDIGENOUS pEOPLES",
     "11-08": "wORLD sTEELPAN dAY",
@@ -215,7 +183,6 @@ INTERNATIONAL_DAYS.update({
     "29-08": "iNTERNATIONAL dAY oF tHE vICTIMS oF eNFORCED dISAPPEARANCES",
     "30-08": "iNTERNATIONAL dAY fOR pEOPLE oF aFRICAN dESCENT",
     "31-08": "iNTERNATIONAL dAY 243",
-    # November
     "02-11": "iNTERNATIONAL dAY tO eND iMPUNITY fOR cRIMES aGAINST jOURNALISTS",
     "05-11": "wORLD tSUNAMI aWARENESS dAY",
     "06-11": "iNTERNATIONAL dAY fOR pREVENTING tHE eXPLOITATION oF tHE eNVIRONMENT iN wAR aND aRMED cONFLICT",
@@ -226,38 +193,29 @@ INTERNATIONAL_DAYS.update({
     "16-11": "wORLD dAY oF rEMEMBRANCE fOR rOAD tRAFFIC vICTIMS",
     "18-11": "wORLD tOILET dAY",
     "19-11": "wORLD pHILOSOPHY dAY",
-    "20-11": "aFRICA iNDUSTRIALIZATION dAY",
     "20-11": "wORLD cHILDREN'S dAY",
-    "20-11": "wORLD tELEVISION dAY",
     "21-11": "wORLD cONJOINED tWINS dAY",
     "24-11": "iNTERNATIONAL dAY fOR tHE eLIMINATION oF vIOLENCE aGAINST wOMEN",
     "25-11": "wORLD sUSTAINABLE tRANSPORT dAY",
     "26-11": "iNTERNATIONAL dAY oF sOLIDARITY wITH tHE pALESTINIAN pEOPLE",
     "29-11": "dAY oF rEMEMBRANCE fOR aLL vICTIMS oF cHEMICAL wARFARE",
     "30-11": "iNTERNATIONAL dAY 334",
-    # December
     "01-12": "wORLD aIDS dAY",
     "02-12": "iNTERNATIONAL dAY fOR tHE aBOLITION oF sLAVERY",
     "03-12": "iNTERNATIONAL dAY oF pERSONS wITH dISABILITIES",
     "04-12": "iNTERNATIONAL dAY oF bANKS",
     "05-12": "iNTERNATIONAL dAY aGAINST uNILATERAL cOERCIVE mEASURES",
-    "05-12": "iNTERNATIONAL vOLUNTEER dAY fOR eCONOMIC aND sOCIAL dEVELOPMENT",
     "07-12": "wORLD sOIL dAY",
-    "07-12": "iNTERNATIONAL cIVIL aVIATION dAY",
     "09-12": "iNTERNATIONAL dAY oF cOMMEMORATION aND dIGNITY oF tHE vICTIMS oF tHE cRIME oF gENOCIDE aND oF tHE pREVENTION oF tHIS cRIME",
-    "09-12": "iNTERNATIONAL aNTI-cORRUPTION dAY",
     "10-12": "hUMAN rIGHTS dAY",
     "11-12": "iNTERNATIONAL mOUNTAIN dAY",
     "12-12": "iNTERNATIONAL dAY oF nEUTRALITY",
-    "12-12": "iNTERNATIONAL uNIVERSAL hEALTH cOVERAGE dAY",
     "18-12": "iNTERNATIONAL mIGRANTS dAY",
-    "18-12": "aRABIC lANGUAGE dAY",
     "20-12": "iNTERNATIONAL hUMAN sOLIDARITY dAY",
     "21-12": "wORLD mEDITATION dAY",
-    "21-12": "wORLD bASKETBALL dAY",
     "27-12": "iNTERNATIONAL dAY oF ePIDEMIC pREPAREDNESS",
     "25-12": "cHRISTMAS dAY"
-})
+}
 
 # =========================
 # Helper Functions
@@ -377,11 +335,36 @@ async def on_ready():
     await bot.tree.sync()
     print(f"{bot.user} is online and commands synced!")
 
+def is_server_allowed(guild_id):
+    """Check if the server is allowed to use Nova."""
+    if ALLOWED_SERVER_ID is None:
+        return True  # No restriction set
+    return guild_id == ALLOWED_SERVER_ID
+
+def check_server_restriction():
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(interaction: discord.Interaction):
+            guild_id = interaction.guild.id if interaction.guild else None
+            if not is_server_allowed(guild_id):
+                await interaction.response.send_message(
+                    embed=nova_embed("🔒 sERVER lOCKED", "nOVA iS lOCKED tO a dIFFERENT sERVER!"),
+                    ephemeral=True
+                )
+                return
+            return await func(interaction)
+        return wrapper
+    return decorator
+
 @bot.event
 async def on_message(message):
     """Event: Called on every message. Adds XP and processes commands."""
     if message.author.bot:
         return
+    
+    # Check if server is allowed
+    if not is_server_allowed(message.guild.id):
+        return  # Ignore messages from unauthorized servers
     # AFK return logic
     if message.author.id in AFK_STATUS:
         afk = AFK_STATUS.pop(message.author.id)
@@ -518,6 +501,39 @@ async def setadminrole(ctx, role_input):
     await ctx.send(f"Admin role set to {role.name} (ID: {role.id})")
 
 @bot.command()
+async def setserver(ctx):
+    """Set the allowed server ID. Owner only."""
+    global ALLOWED_SERVER_ID
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("Only the bot owner can use this command.")
+        return
+    ALLOWED_SERVER_ID = ctx.guild.id
+    await ctx.send(embed=nova_embed("🔒 sERVER lOCKED", f"✅ nOVA iS nOW lOCKED tO tHIS sERVER: {ctx.guild.name} (ID: {ctx.guild.id})"))
+
+@bot.command()
+async def removeserverlock(ctx):
+    """Remove server restriction. Owner only."""
+    global ALLOWED_SERVER_ID
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("Only the bot owner can use this command.")
+        return
+    ALLOWED_SERVER_ID = None
+    await ctx.send("✅ Server restriction removed. Nova can now work in any server.")
+
+@bot.command()
+async def serverstatus(ctx):
+    """Check current server restriction status. Owner only."""
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("Only the bot owner can use this command.")
+        return
+    if ALLOWED_SERVER_ID is None:
+        await ctx.send("🔓 **Server Status:** No restriction set - Nova works in all servers")
+    else:
+        guild = bot.get_guild(ALLOWED_SERVER_ID)
+        guild_name = guild.name if guild else "Unknown Server"
+        await ctx.send(f"🔒 **Server Status:** Nova is locked to {guild_name} (ID: {ALLOWED_SERVER_ID})")
+
+@bot.command()
 async def help(ctx):
     help_text = """
 Prefix & Slash Commands:
@@ -530,6 +546,7 @@ Prefix & Slash Commands:
     await ctx.send(embed=nova_embed("nOVA'S cOMMANDS", help_text))
 
 @bot.tree.command(name="help", description="Show all Nova commands")
+@check_server_restriction()
 async def help_slash(interaction: discord.Interaction):
     help_text = """
 Prefix & Slash Commands:
@@ -735,7 +752,9 @@ async def spotify(ctx, member: discord.Member = None):
             )
             embed.set_thumbnail(url=activity.album_cover_url)
             embed.add_field(name="Track URL", value=f"[Open in Spotify](https://open.spotify.com/track/{activity.track_id})")
-            await ctx.send(embed=embed)
+            msg = await ctx.send(embed=embed)
+            await msg.add_reaction("👍")
+            await msg.add_reaction("👎")
             return
     await ctx.send(f"{member.display_name} is not listening to Spotify right now.")
 
@@ -922,7 +941,9 @@ async def spotify_slash(interaction: discord.Interaction, member: discord.Member
             )
             embed.set_thumbnail(url=activity.album_cover_url)
             embed.add_field(name="Track URL", value=f"[Open in Spotify](https://open.spotify.com/track/{activity.track_id})")
-            await interaction.response.send_message(embed=embed)
+            msg = await interaction.channel.send(embed=embed)
+            await msg.add_reaction("👍")
+            await msg.add_reaction("👎")
             return
     await interaction.response.send_message(f"{member.display_name} is not listening to Spotify right now.")
 
@@ -1326,10 +1347,10 @@ async def kiss(ctx, user: discord.Member):
         await ctx.send(embed=nova_embed("kISS", "yOU cAN'T kISS yOURSELF!"))
         return
     responses = [
-        f"💋 {ctx.author.display_name} kISSES {user.display_name} gENTLY!",
-        f"😘 {ctx.author.display_name} gIVES {user.display_name} a sWEET kISS!",
-        f"💕 {ctx.author.display_name} pLANTS a kISS oN {user.display_name}'s cHEEK!",
-        f"🥰 {ctx.author.display_name} kISSES {user.display_name} pASSIONATELY!"
+        f"💋 {ctx.author.mention} kISSES {user.mention} gENTLY!",
+        f"😘 {ctx.author.mention} gIVES {user.mention} a sWEET kISS!",
+        f"💕 {ctx.author.mention} pLANTS a kISS oN {user.display_name}'s cHEEK!",
+        f"🥰 {ctx.author.mention} kISSES {user.display_name} pASSIONATELY!"
     ]
     await ctx.send(embed=nova_embed("kISS", random.choice(responses)))
 
@@ -1340,10 +1361,10 @@ async def kiss_slash(interaction: discord.Interaction, user: discord.Member):
         await interaction.response.send_message(embed=nova_embed("kISS", "yOU cAN'T kISS yOURSELF!"))
         return
     responses = [
-        f"💋 {interaction.user.display_name} kISSES {user.display_name} gENTLY!",
-        f"😘 {interaction.user.display_name} gIVES {user.display_name} a sWEET kISS!",
-        f"💕 {interaction.user.display_name} pLANTS a kISS oN {user.display_name}'s cHEEK!",
-        f"🥰 {interaction.user.display_name} kISSES {user.display_name} pASSIONATELY!"
+        f"�� {interaction.user.mention} kISSES {user.mention} gENTLY!",
+        f"😘 {interaction.user.mention} gIVES {user.mention} a sWEET kISS!",
+        f"💕 {interaction.user.mention} pLANTS a kISS oN {user.display_name}'s cHEEK!",
+        f"🥰 {interaction.user.mention} kISSES {user.display_name} pASSIONATELY!"
     ]
     await interaction.response.send_message(embed=nova_embed("kISS", random.choice(responses)))
 
@@ -1353,10 +1374,10 @@ async def slap(ctx, user: discord.Member):
         await ctx.send(embed=nova_embed("sLAP", "yOU cAN'T sLAP yOURSELF!"))
         return
     responses = [
-        f"👋 {ctx.author.display_name} sLAPS {user.display_name} aCROSS tHE fACE!",
-        f"💥 {ctx.author.display_name} gIVES {user.display_name} a hARD sLAP!",
-        f"🤚 {ctx.author.display_name} sLAPS {user.display_name} wITH a tOWEL!",
-        f"💢 {ctx.author.display_name} sLAPS {user.display_name} fOR bEING nAUGHTY!"
+        f"👋 {ctx.author.mention} sLAPS {user.mention} aCROSS tHE fACE!",
+        f"💥 {ctx.author.mention} gIVES {user.mention} a hARD sLAP!",
+        f"🤚 {ctx.author.mention} sLAPS {user.mention} wITH a tOWEL!",
+        f"💢 {ctx.author.mention} sLAPS {user.display_name} fOR bEING nAUGHTY!"
     ]
     await ctx.send(embed=nova_embed("sLAP", random.choice(responses)))
 
@@ -1367,10 +1388,10 @@ async def slap_slash(interaction: discord.Interaction, user: discord.Member):
         await interaction.response.send_message(embed=nova_embed("sLAP", "yOU cAN'T sLAP yOURSELF!"))
         return
     responses = [
-        f"👋 {interaction.user.display_name} sLAPS {user.display_name} aCROSS tHE fACE!",
-        f"💥 {interaction.user.display_name} gIVES {user.display_name} a hARD sLAP!",
-        f"🤚 {interaction.user.display_name} sLAPS {user.display_name} wITH a tOWEL!",
-        f"💢 {interaction.user.display_name} sLAPS {user.display_name} fOR bEING nAUGHTY!"
+        f"�� {interaction.user.mention} sLAPS {user.mention} aCROSS tHE fACE!",
+        f"💥 {interaction.user.mention} gIVES {user.mention} a hARD sLAP!",
+        f"🤚 {interaction.user.mention} sLAPS {user.mention} wITH a tOWEL!",
+        f"💢 {interaction.user.mention} sLAPS {user.display_name} fOR bEING nAUGHTY!"
     ]
     await interaction.response.send_message(embed=nova_embed("sLAP", random.choice(responses)))
 
@@ -1533,21 +1554,18 @@ async def unlock_slash(interaction: discord.Interaction):
     except Exception:
         await interaction.response.send_message(embed=nova_embed("uNLOCK", "cOULD nOT uNLOCK tHE cHANNEL!"), ephemeral=True)
 
-# AFK
-AFK_STATUS = {}  # user_id: {"reason": str, "since": datetime, "mentions": set(user_id)}
-
 # Pending adoptions
 pending_adoptions = {}  # user_id: adopter_id
 
 @bot.command()
 async def afk(ctx, *, reason: str = "aFK"): 
-    AFK_STATUS[ctx.author.id] = {"reason": reason, "since": datetime.datetime.utcnow(), "mentions": set()}
+    AFK_STATUS[ctx.author.id] = {"reason": reason, "since": datetime.utcnow(), "mentions": set()}
     await ctx.send(embed=nova_embed("aFK", f"{ctx.author.display_name} iS nOW aFK: {reason}"))
 
 @bot.tree.command(name="afk", description="Set your AFK status with an optional message")
 @app_commands.describe(reason="Why are you AFK?")
 async def afk_slash(interaction: discord.Interaction, reason: str = "aFK"):
-    AFK_STATUS[interaction.user.id] = {"reason": reason, "since": datetime.datetime.utcnow(), "mentions": set()}
+    AFK_STATUS[interaction.user.id] = {"reason": reason, "since": datetime.utcnow(), "mentions": set()}
     await interaction.response.send_message(embed=nova_embed("aFK", f"{interaction.user.display_name} iS nOW aFK: {reason}"), ephemeral=True)
 
 class MentionsView(View):
@@ -1996,7 +2014,6 @@ async def birthdays(ctx):
 @bot.command()
 async def today(ctx):
     """Shows today's international day, Nova style, in a vibrant embed."""
-    from datetime import datetime
     now = datetime.now()
     key = now.strftime("%d-%m")
     day = INTERNATIONAL_DAYS.get(key)
@@ -2559,18 +2576,22 @@ async def runway(ctx, message_id: int = None):
             await ctx.send(embed=nova_embed("rUNWAY", "cOULD nOT fIND tHE rUNWAY cHANNEL!"))
             return
         
-        # Create runway embed
-        embed = nova_embed("rUNWAY", message.content)
+        # Create runway embed with crying emoji and message number
+        embed = nova_embed("😢 #" + str(message.id), message.content)
         embed.set_author(name=message.author.display_name, icon_url=message.author.avatar.url if message.author.avatar else None)
         embed.add_field(name="oRIGINAL cHANNEL", value=ctx.channel.mention, inline=True)
-        embed.add_field(name="tRANSFERRED bY", value=ctx.author.mention, inline=True)
         embed.set_footer(text=f"Message ID: {message.id}")
         
-        # Add attachments if any
-        if message.attachments:
-            embed.add_field(name="aTTACHMENTS", value=f"{len(message.attachments)} file(s)", inline=False)
+        # Send attachments separately if any
+        files = []
+        for attachment in message.attachments:
+            try:
+                file_data = await attachment.read()
+                files.append(discord.File(io.BytesIO(file_data), filename=attachment.filename))
+            except Exception:
+                continue
         
-        await runway_channel.send(embed=embed)
+        await runway_channel.send(embed=embed, files=files)
         await ctx.send(embed=nova_embed("rUNWAY", f"mESSAGE tRANSFERRED tO {runway_channel.mention}!"))
         
     except Exception as e:
@@ -2611,18 +2632,22 @@ async def runway_slash(interaction: discord.Interaction, message_id: int = None)
             await interaction.response.send_message(embed=nova_embed("rUNWAY", "cOULD nOT fIND tHE rUNWAY cHANNEL!"), ephemeral=True)
             return
         
-        # Create runway embed
-        embed = nova_embed("rUNWAY", message.content)
+        # Create runway embed with crying emoji and message number
+        embed = nova_embed("😢 #" + str(message.id), message.content)
         embed.set_author(name=message.author.display_name, icon_url=message.author.avatar.url if message.author.avatar else None)
         embed.add_field(name="oRIGINAL cHANNEL", value=interaction.channel.mention, inline=True)
-        embed.add_field(name="tRANSFERRED bY", value=interaction.user.mention, inline=True)
         embed.set_footer(text=f"Message ID: {message.id}")
         
-        # Add attachments if any
-        if message.attachments:
-            embed.add_field(name="aTTACHMENTS", value=f"{len(message.attachments)} file(s)", inline=False)
+        # Send attachments separately if any
+        files = []
+        for attachment in message.attachments:
+            try:
+                file_data = await attachment.read()
+                files.append(discord.File(io.BytesIO(file_data), filename=attachment.filename))
+            except Exception:
+                continue
         
-        await runway_channel.send(embed=embed)
+        await runway_channel.send(embed=embed, files=files)
         await interaction.response.send_message(embed=nova_embed("rUNWAY", f"mESSAGE tRANSFERRED tO {runway_channel.mention}!"), ephemeral=True)
         
     except Exception as e:
@@ -2890,6 +2915,7 @@ async def buythrift_slash(interaction: discord.Interaction, idx: int):
 # Store last deleted and edited messages per channel
 snipes = {}
 edsnipes = {}
+rsnipes = {}  # channel_id: {'emoji': str, 'user': str, 'message_id': int, 'jump_url': str, 'time': datetime}
 
 @bot.event
 async def on_message_delete(message):
@@ -2911,6 +2937,66 @@ async def on_message_edit(before, after):
         'time': before.edited_at or before.created_at
     }
 
+@bot.event
+async def on_raw_reaction_remove(payload):
+    # Store the last removed reaction for rsnipe
+    if payload.guild_id is None:
+        return
+    channel = bot.get_channel(payload.channel_id)
+    if channel is None:
+        return
+    user = None
+    guild = bot.get_guild(payload.guild_id)
+    if guild:
+        user = guild.get_member(payload.user_id)
+    if user is None or user.bot:
+        return
+    try:
+        message = await channel.fetch_message(payload.message_id)
+    except Exception:
+        message = None
+    jump_url = message.jump_url if message else None
+    rsnipes[payload.channel_id] = {
+        'emoji': str(payload.emoji),
+        'user': str(user),
+        'message_id': payload.message_id,
+        'jump_url': jump_url,
+        'time': datetime.now(timezone.utc)
+    }
+
+@bot.command()
+async def rsnipe(ctx):
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("rSNIPE", "yOU dON'T hAVE pERMISSION!"))
+        return
+    data = rsnipes.get(ctx.channel.id)
+    if not data:
+        await ctx.send(embed=nova_embed("rSNIPE", "nOTHING tO rSNIPE!"))
+        return
+    desc = f"{data['user']} rEMOVED rEACTION {data['emoji']}"
+    if data['jump_url']:
+        desc += f"\n[Jump to message]({data['jump_url']})"
+    embed = nova_embed("rSNIPE", desc)
+    embed.set_footer(text=f"{data['time'].strftime('%Y-%m-%d %H:%M:%S')}")
+    await ctx.send(embed=embed)
+
+@bot.tree.command(name="rsnipe", description="Show the last removed reaction in this channel")
+async def rsnipe_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message(embed=nova_embed("rSNIPE", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    data = rsnipes.get(interaction.channel.id)
+    if not data:
+        await interaction.response.send_message(embed=nova_embed("rSNIPE", "nOTHING tO rSNIPE!"), ephemeral=True)
+        return
+    desc = f"{data['user']} rEMOVED rEACTION {data['emoji']}"
+    if data['jump_url']:
+        desc += f"\n[Jump to message]({data['jump_url']})"
+    embed = nova_embed("rSNIPE", desc)
+    embed.set_footer(text=f"{data['time'].strftime('%Y-%m-%d %H:%M:%S')}")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 # Store moderation cases per guild
 mod_cases = {}
 
@@ -2925,5 +3011,163 @@ def log_case(guild_id, action, user, channel, time):
     })
     if len(mod_cases[guild_id]) > 20:
         mod_cases[guild_id] = mod_cases[guild_id][:20]
+
+@bot.command()
+async def dmtest(ctx):
+    if ctx.guild is None:
+        # In a DM
+        await ctx.send(embed=nova_embed("dM tEST", "yOU'RE iN mY dMS, bABY! 💌"))
+    else:
+        # In a server
+        await ctx.send(embed=nova_embed("dM tEST", "yOU'RE iN a sERVER, hONEY! 💅"))
+
+@bot.command()
+async def imposter(ctx):
+    if ctx.guild is None:
+        await ctx.send(embed=nova_embed("iMPOSTER", "tHIS cOMMAND mUST bE uSED iN a sERVER cHANNEL!"))
+        return
+    word_list = [
+        "banana", "apple", "grape", "peach", "lemon", "carrot", "onion", "potato", "pizza", "burger",
+        "sushi", "taco", "pasta", "croissant", "ramen", "falafel", "burrito", "cheesecake", "donut", "waffle",
+        "mountain", "beach", "desert", "forest", "island", "volcano", "river", "ocean", "cave", "valley",
+        "laptop", "phone", "keyboard", "camera", "guitar", "piano", "bicycle", "skateboard", "umbrella", "backpack",
+        "dragon", "unicorn", "zombie", "robot", "pirate", "wizard", "ghost", "alien", "vampire", "mermaid",
+        "diamond", "gold", "ruby", "sapphire", "emerald", "pearl", "opal", "jade", "topaz", "amethyst"
+    ]
+    join_msg = await ctx.send(embed=nova_embed("iMPOSTER gAME", f"rEACT wITH 🕵️ tO jOIN!\n\nyOU hAVE 30 sECONDS..."))
+    await join_msg.add_reaction("🕵️")
+    reacted_users = set()
+    def check(reaction, user):
+        return (
+            reaction.message.id == join_msg.id and
+            str(reaction.emoji) == "🕵️" and
+            not user.bot and
+            user not in reacted_users
+        )
+    try:
+        while True:
+            reaction, user = await bot.wait_for("reaction_add", timeout=30.0, check=check)
+            reacted_users.add(user)
+    except asyncio.TimeoutError:
+        pass
+    players = list(reacted_users)
+    if len(players) < 3:
+        await ctx.send(embed=nova_embed("iMPOSTER", "nOT eNOUGH pLAYERS rEACTED! gAME cANCELLED, bABY!"))
+        return
+    imposter = random.choice(players)
+    secret_word = random.choice(word_list)
+    imposter_word = random.choice([w for w in word_list if w != secret_word])
+    failed = []
+    for m in players:
+        try:
+            if m == imposter:
+                await m.send(embed=nova_embed("iMPOSTER wORD", f"yOU aRE tHE iMPOSTER! yOUR wORD iS: **{imposter_word}**"))
+            else:
+                await m.send(embed=nova_embed("iMPOSTER wORD", f"yOUR wORD iS: **{secret_word}**"))
+        except Exception:
+            failed.append(m.display_name)
+    joined_names = ", ".join([f"**{u.display_name}**" for u in players])
+    await ctx.send(embed=nova_embed("iMPOSTER", f"aLL sECRET wORDS hAVE bEEN sENT!\n\n**pLAYERS:** {joined_names}"))
+    if failed:
+        await ctx.send(embed=nova_embed("iMPOSTER", f"cOULD nOT dM: {', '.join(failed)}"))
+    # --- Rounds ---
+    round_num = 1
+    max_rounds = 10
+    game_over = False
+    while round_num <= max_rounds and not game_over:
+        await ctx.send(embed=nova_embed(f"rOUND {round_num}", "eVERYONE, sAY yOUR wORD! nOVA wILL tAG yOU oNE bY oNE."))
+        for p in players:
+            await ctx.send(f"{p.mention}, iT'S yOUR tURN tO sAY yOUR wORD!")
+            def msg_check(m):
+                return m.author == p and m.channel == ctx.channel
+            try:
+                await bot.wait_for("message", timeout=60.0, check=msg_check)
+            except asyncio.TimeoutError:
+                await ctx.send(f"{p.mention} dID nOT rESPOND iN tIME!")
+        # Voting to continue or end
+        vote_msg = await ctx.send(embed=nova_embed("cONTINUE oR eND?", "rEACT wITH ✅ tO cONTINUE, ❌ tO eND tHE gAME!"))
+        await vote_msg.add_reaction("✅")
+        await vote_msg.add_reaction("❌")
+        await asyncio.sleep(20)  # 20 seconds to vote
+        vote_msg = await ctx.channel.fetch_message(vote_msg.id)
+        cont_votes = 0
+        end_votes = 0
+        for reaction in vote_msg.reactions:
+            if str(reaction.emoji) == "✅":
+                cont_votes = reaction.count - 1
+            elif str(reaction.emoji) == "❌":
+                end_votes = reaction.count - 1
+        if end_votes > cont_votes:
+            game_over = True
+            await ctx.send(embed=nova_embed("gAME eNDING", "mAJORITY vOTED tO eND tHE gAME!"))
+        else:
+            round_num += 1
+    # --- Final Voting ---
+    await ctx.send(embed=nova_embed("vOTE tHE iMPOSTER!", "rEACT wITH tHE eMOJI fOR wHO yOU tHINK iS tHE iMPOSTER!"))
+    emojis = [chr(0x1F1E6 + i) for i in range(len(players))]  # 🇦, 🇧, 🇨, ...
+    vote_embed = discord.Embed(title="vOTE tHE iMPOSTER!", description="\n".join([f"{emojis[i]} {players[i].mention}" for i in range(len(players))]), color=0xff69b4)
+    vote_embed.set_footer(text="nOVA")
+    vote_msg = await ctx.send(embed=vote_embed)
+    for e in emojis:
+        await vote_msg.add_reaction(e)
+    await asyncio.sleep(20)  # 20 seconds to vote
+    vote_msg = await ctx.channel.fetch_message(vote_msg.id)
+    votes = [0] * len(players)
+    for reaction in vote_msg.reactions:
+        if reaction.emoji in emojis:
+            idx = emojis.index(reaction.emoji)
+            votes[idx] = reaction.count - 1
+    max_votes = max(votes)
+    if votes.count(max_votes) > 1:
+        await ctx.send(embed=nova_embed("nO wINNER", "iT'S a tIE! nO oNE wINS!"))
+        return
+    voted_idx = votes.index(max_votes)
+    voted_player = players[voted_idx]
+    if voted_player == imposter:
+        # Crew wins
+        for p in players:
+            if p != imposter:
+                change_balance(p.id, 200)
+        await ctx.send(embed=nova_embed("cREW wINS!", f"tHE cREW fOUND tHE iMPOSTER!\n\n{imposter.mention} wAS tHE iMPOSTER!\n\n{', '.join([pl.mention for pl in players if pl != imposter])} gET 200 {CURRENCY_NAME} eACH!"))
+    else:
+        # Imposter wins
+        change_balance(imposter.id, 500)
+        await ctx.send(embed=nova_embed("iMPOSTER wINS!", f"{imposter.mention} sURVIVED! tHEY gET 500 {CURRENCY_NAME}!"))
+
+@bot.tree.command(name="imposter", description="Start an imposter game and DM secret words!")
+async def imposter_slash(interaction: discord.Interaction):
+    if interaction.guild is None or interaction.channel is None:
+        await interaction.response.send_message(embed=nova_embed("iMPOSTER", "tHIS cOMMAND mUST bE uSED iN a sERVER cHANNEL!"), ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    # Get all non-bot members who can see the channel
+    channel = interaction.channel
+    if not hasattr(channel, 'members'):
+        await interaction.followup.send(embed=nova_embed("iMPOSTER", "cOULD nOT gET cHANNEL mEMBERS!"), ephemeral=True)
+        return
+    members = [m for m in channel.members if not m.bot]
+    if len(members) < 3:
+        await interaction.followup.send(embed=nova_embed("iMPOSTER", "nEED aT lEAST 3 pEOPLE tO pLAY!"), ephemeral=True)
+        return
+    imposter = random.choice(members)
+    word_list = ["banana", "apple", "grape", "peach", "lemon", "carrot", "onion", "potato", "pizza", "burger"]
+    secret_word = random.choice(word_list)
+    imposter_word = random.choice([w for w in word_list if w != secret_word])
+    # Send game start message
+    msg = await channel.send(embed=nova_embed("iMPOSTER gAME", f"rEACT wITH 🕵️ tO tHIS mESSAGE tO jOIN!\n\nyOU hAVE 45 sECONDS..."))
+    await msg.add_reaction("🕵️")
+    failed = []
+    for m in members:
+        try:
+            if m == imposter:
+                await m.send(embed=nova_embed("iMPOSTER wORD", f"yOU aRE tHE iMPOSTER! yOUR wORD iS: **{imposter_word}**"))
+            else:
+                await m.send(embed=nova_embed("iMPOSTER wORD", f"yOUR wORD iS: **{secret_word}**"))
+        except Exception:
+            failed.append(m.display_name)
+    if failed:
+        await channel.send(embed=nova_embed("iMPOSTER", f"cOULD nOT dM: {', '.join(failed)}"))
+    await channel.send(embed=nova_embed("iMPOSTER", "aLL sECRET wORDS hAVE bEEN sENT!"))
+    await interaction.followup.send(embed=nova_embed("iMPOSTER", "gAME sTARTED! cHECK yOUR dMS!"), ephemeral=True)
 
 bot.run(TOKEN)
