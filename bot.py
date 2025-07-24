@@ -67,6 +67,9 @@ AFK_STATUS = {}  # user_id: {"reason": str, "since": datetime, "mentions": set(u
 # Runway system
 RUNWAY_CHANNEL_ID = None  # Set this to your runway channel ID
 
+# Chat logs system
+CHAT_LOGS_CHANNEL_ID = None  # Set by ?setchatlogs
+
 # International days dictionary (all 365 days, placeholder names)
 INTERNATIONAL_DAYS = {
     "04-01": "wORLD bRAILLE dAY",
@@ -223,15 +226,25 @@ INTERNATIONAL_DAYS = {
 
 def load_config():
     """Load configuration from CONFIG_FILE into the global config dict."""
-    global config
+    global config, CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID
     try:
         with open(CONFIG_FILE, "r") as f:
             config = json.load(f)
+            CHAT_LOGS_CHANNEL_ID = config.get("chat_logs_channel_id")
+            WELCOME_CHANNEL_ID = config.get("welcome_channel_id")
+            FAREWELL_CHANNEL_ID = config.get("farewell_channel_id")
     except FileNotFoundError:
-        config = {"mod_role_id": None, "admin_role_id": None}
+        config = {"mod_role_id": None, "admin_role_id": None, "chat_logs_channel_id": None, "welcome_channel_id": None, "farewell_channel_id": None}
+        CHAT_LOGS_CHANNEL_ID = None
+        WELCOME_CHANNEL_ID = None
+        FAREWELL_CHANNEL_ID = None
 
 def save_config():
     """Save the current config dict to CONFIG_FILE."""
+    global CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID
+    config["chat_logs_channel_id"] = CHAT_LOGS_CHANNEL_ID
+    config["welcome_channel_id"] = WELCOME_CHANNEL_ID
+    config["farewell_channel_id"] = FAREWELL_CHANNEL_ID
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f)
 
@@ -410,7 +423,43 @@ async def on_message(message):
 
 @bot.event
 async def on_raw_reaction_add(payload):
-    """Event: Called when a reaction is added. Handles role assignment."""
+    """Event: Called when a reaction is added. Handles role assignment and runway emoji forwarding."""
+    # --- Runway emoji forwarding ---
+    # Only act on server messages
+    if payload.guild_id and str(payload.emoji) == "😭":
+        guild = bot.get_guild(payload.guild_id)
+        if guild and RUNWAY_CHANNEL_ID:
+            channel = guild.get_channel(payload.channel_id)
+            if channel:
+                try:
+                    message = await channel.fetch_message(payload.message_id)
+                    # Count loudly crying emoji reactions
+                    for reaction in message.reactions:
+                        if (str(reaction.emoji) == "😭") and (reaction.count >= 4):
+                            # Only forward if not already forwarded (avoid spam)
+                            # Optionally, you could keep a set of forwarded message IDs
+                            runway_channel = guild.get_channel(RUNWAY_CHANNEL_ID)
+                            if runway_channel:
+                                embed = nova_embed(
+                                    title=f"😭 #{message.id}",
+                                    description=message.content
+                                )
+                                embed.set_author(name=message.author.display_name, icon_url=message.author.avatar.url if message.author.avatar else None)
+                                embed.add_field(name="oRIGINAL cHANNEL", value=channel.mention, inline=True)
+                                embed.add_field(name="jUMP tO mESSAGE", value=f"[Click here]({message.jump_url})", inline=True)
+                                embed.set_footer(text=f"Message ID: {message.id}")
+                                files = []
+                                for attachment in message.attachments:
+                                    try:
+                                        file_data = await attachment.read()
+                                        files.append(discord.File(io.BytesIO(file_data), filename=attachment.filename))
+                                    except Exception:
+                                        continue
+                                await runway_channel.send(embed=embed, files=files)
+                            break  # Only forward once per event
+                except Exception:
+                    pass  # Silently ignore errors for this feature
+    # --- Role assignment (existing logic) ---
     if payload.message_id != ROLE_MESSAGE_ID:
         return
     guild = bot.get_guild(payload.guild_id)
@@ -659,6 +708,7 @@ async def nuke(ctx):
         return
     await ctx.channel.purge(limit=1000)
     await ctx.send("boom")
+    await ctx.send("Usage: ?nuke - Deletes all messages in the channel. Only mods/admins can use this.")
 
 @bot.command()
 async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
@@ -668,6 +718,7 @@ async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
     try:
         await member.kick(reason=reason)
         await ctx.send(f"Kicked {member} for: {reason}")
+        await ctx.send("Usage: ?kick @user [reason] - Kicks a member from the server. Only mods/admins can use this.")
     except Exception as e:
         await ctx.send(f"Failed to kick: {e}")
 
@@ -679,6 +730,7 @@ async def ban(ctx, member: discord.Member, *, reason="No reason provided"):
     try:
         await member.ban(reason=reason)
         await ctx.send(f"Banned {member} for: {reason}")
+        await ctx.send("Usage: ?ban @user [reason] - Bans a member from the server. Only mods/admins can use this.")
     except Exception as e:
         await ctx.send(f"Failed to ban: {e}")
 
@@ -689,6 +741,7 @@ async def clear(ctx, amount: int = 5):
         return
     deleted = await ctx.channel.purge(limit=amount)
     await ctx.send(f"Cleared {len(deleted)} messages", delete_after=3)
+    await ctx.send("Usage: ?clear [amount] - Deletes a number of messages. Only mods/admins can use this.")
 
 @bot.command()
 async def reactionroles(ctx):
@@ -832,6 +885,7 @@ async def nuke_slash(interaction: discord.Interaction):
         return
     await interaction.channel.purge(limit=1000)
     await interaction.response.send_message("boom")
+    await interaction.followup.send("Usage: /nuke - Deletes all messages in the channel. Only mods/admins can use this.", ephemeral=True)
 
 # Slash command version of kick
 @bot.tree.command(name="kick", description="Kick a member (mods only)")
@@ -844,6 +898,7 @@ async def kick_slash(interaction: discord.Interaction, member: discord.Member, r
     try:
         await member.kick(reason=reason)
         await interaction.response.send_message(f"Kicked {member} for: {reason}")
+        await interaction.followup.send("Usage: /kick @user [reason] - Kicks a member from the server. Only mods/admins can use this.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"Failed to kick: {e}", ephemeral=True)
 
@@ -858,19 +913,9 @@ async def ban_slash(interaction: discord.Interaction, member: discord.Member, re
     try:
         await member.ban(reason=reason)
         await interaction.response.send_message(f"Banned {member} for: {reason}")
+        await interaction.followup.send("Usage: /ban @user [reason] - Bans a member from the server. Only mods/admins can use this.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"Failed to ban: {e}", ephemeral=True)
-
-# Slash command version of clear
-@bot.tree.command(name="clear", description="Delete messages (mods only)")
-@app_commands.describe(amount="Number of messages to delete (default 5)")
-async def clear_slash(interaction: discord.Interaction, amount: int = 5):
-    ctx = await bot.get_context(interaction)
-    if not has_mod_or_admin(ctx):
-        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
-        return
-    deleted = await interaction.channel.purge(limit=amount)
-    await interaction.response.send_message(f"Cleared {len(deleted)} messages", ephemeral=True)
 
 # Slash command version of reactionroles
 @bot.tree.command(name="reactionroles", description="Post gender role selection message")
@@ -1516,6 +1561,7 @@ async def lock(ctx):
     try:
         await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
         await ctx.send(embed=nova_embed("lOCK", f"🔒 {ctx.channel.mention} hAS bEEN lOCKED!"))
+        await ctx.send("Usage: ?lock - Locks the current channel. Only mods/admins can use this.")
     except Exception:
         await ctx.send(embed=nova_embed("lOCK", "cOULD nOT lOCK tHE cHANNEL!"))
 
@@ -1528,6 +1574,7 @@ async def lock_slash(interaction: discord.Interaction):
     try:
         await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)
         await interaction.response.send_message(embed=nova_embed("lOCK", f"🔒 {interaction.channel.mention} hAS bEEN lOCKED!"))
+        await interaction.followup.send("Usage: /lock - Locks the current channel. Only mods/admins can use this.", ephemeral=True)
     except Exception:
         await interaction.response.send_message(embed=nova_embed("lOCK", "cOULD nOT lOCK tHE cHANNEL!"), ephemeral=True)
 
@@ -1539,6 +1586,7 @@ async def unlock(ctx):
     try:
         await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=None)
         await ctx.send(embed=nova_embed("uNLOCK", f"🔓 {ctx.channel.mention} hAS bEEN uNLOCKED!"))
+        await ctx.send("Usage: ?unlock - Unlocks the current channel. Only mods/admins can use this.")
     except Exception:
         await ctx.send(embed=nova_embed("uNLOCK", "cOULD nOT uNLOCK tHE cHANNEL!"))
 
@@ -1551,6 +1599,7 @@ async def unlock_slash(interaction: discord.Interaction):
     try:
         await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=None)
         await interaction.response.send_message(embed=nova_embed("uNLOCK", f"🔓 {interaction.channel.mention} hAS bEEN uNLOCKED!"))
+        await interaction.followup.send("Usage: /unlock - Unlocks the current channel. Only mods/admins can use this.", ephemeral=True)
     except Exception:
         await interaction.response.send_message(embed=nova_embed("uNLOCK", "cOULD nOT uNLOCK tHE cHANNEL!"), ephemeral=True)
 
@@ -1558,15 +1607,17 @@ async def unlock_slash(interaction: discord.Interaction):
 pending_adoptions = {}  # user_id: adopter_id
 
 @bot.command()
-async def afk(ctx, *, reason: str = "aFK"): 
-    AFK_STATUS[ctx.author.id] = {"reason": reason, "since": datetime.utcnow(), "mentions": set()}
+async def afk(ctx, *, reason: str = "aFK"):
+    AFK_STATUS[ctx.author.id] = {"reason": reason, "since": datetime.now(timezone.utc), "mentions": set()}
     await ctx.send(embed=nova_embed("aFK", f"{ctx.author.display_name} iS nOW aFK: {reason}"))
+    await ctx.send("Usage: ?afk [reason] - Sets your AFK status. Mentioning you will notify the sender. Use any message to remove AFK.")
 
 @bot.tree.command(name="afk", description="Set your AFK status with an optional message")
 @app_commands.describe(reason="Why are you AFK?")
 async def afk_slash(interaction: discord.Interaction, reason: str = "aFK"):
-    AFK_STATUS[interaction.user.id] = {"reason": reason, "since": datetime.utcnow(), "mentions": set()}
+    AFK_STATUS[interaction.user.id] = {"reason": reason, "since": datetime.now(timezone.utc), "mentions": set()}
     await interaction.response.send_message(embed=nova_embed("aFK", f"{interaction.user.display_name} iS nOW aFK: {reason}"), ephemeral=True)
+    await interaction.followup.send("Usage: /afk [reason] - Sets your AFK status. Mentioning you will notify the sender. Use any message to remove AFK.", ephemeral=True)
 
 class MentionsView(View):
     def __init__(self, user_id):
@@ -1613,6 +1664,7 @@ async def mute(ctx, member: discord.Member = None):
     try:
         await member.add_roles(role, reason="Muted by Nova")
         await ctx.send(embed=nova_embed("mUTE", f"{member.mention} hAS bEEN mUTED sERVER-WIDE!"))
+        await ctx.send("Usage: ?mute @user - Mutes a member server-wide. Only mods/admins can use this.")
     except Exception:
         await ctx.send(embed=nova_embed("mUTE", "cOULD nOT mUTE tHAT uSER!"))
 
@@ -1636,6 +1688,7 @@ async def mute_slash(interaction: discord.Interaction, member: discord.Member):
     try:
         await member.add_roles(role, reason="Muted by Nova")
         await interaction.response.send_message(embed=nova_embed("mUTE", f"{member.mention} hAS bEEN mUTED sERVER-WIDE!"))
+        await interaction.followup.send("Usage: /mute @user - Mutes a member server-wide. Only mods/admins can use this.", ephemeral=True)
     except Exception:
         await interaction.response.send_message(embed=nova_embed("mUTE", "cOULD nOT mUTE tHAT uSER!"), ephemeral=True)
 
@@ -1654,6 +1707,7 @@ async def unmute(ctx, member: discord.Member = None):
     try:
         await member.remove_roles(role, reason="Unmuted by Nova")
         await ctx.send(embed=nova_embed("uNMUTE", f"{member.mention} hAS bEEN uNMUTED!"))
+        await ctx.send("Usage: ?unmute @user - Unmutes a member server-wide. Only mods/admins can use this.")
     except Exception:
         await ctx.send(embed=nova_embed("uNMUTE", "cOULD nOT uNMUTE tHAT uSER!"))
 
@@ -1671,6 +1725,7 @@ async def unmute_slash(interaction: discord.Interaction, member: discord.Member)
     try:
         await member.remove_roles(role, reason="Unmuted by Nova")
         await interaction.response.send_message(embed=nova_embed("uNMUTE", f"{member.mention} hAS bEEN uNMUTED!"))
+        await interaction.followup.send("Usage: /unmute @user - Unmutes a member server-wide. Only mods/admins can use this.", ephemeral=True)
     except Exception:
         await interaction.response.send_message(embed=nova_embed("uNMUTE", "cOULD nOT uNMUTE tHAT uSER!"), ephemeral=True)
 
@@ -1678,23 +1733,25 @@ async def unmute_slash(interaction: discord.Interaction, member: discord.Member)
 async def case(ctx):
     cases = mod_cases.get(ctx.guild.id, [])
     if not cases:
-        await ctx.send(embed=nova_embed("cASES", "nO mOD cASES yET!"))
+        await ctx.send(embed=nova_embed("cASES", "nO mODERATION cASES fOUND!"))
         return
     desc = ""
     for i, c in enumerate(cases, 1):
         desc += f"**{i}.** `{c['action']}` by {c['user']} in {c['channel']} • {c['time'].strftime('%Y-%m-%d %H:%M:%S')}\n"
     await ctx.send(embed=nova_embed("cASES", desc))
+    await ctx.send("Usage: ?case - Shows the last 20 moderation actions. Only mods/admins can use this.")
 
 @bot.tree.command(name="case", description="Show all moderation actions in this server (up to 20)")
 async def case_slash(interaction: discord.Interaction):
     cases = mod_cases.get(interaction.guild.id, [])
     if not cases:
-        await interaction.response.send_message(embed=nova_embed("cASES", "nO mOD cASES yET!"), ephemeral=True)
+        await interaction.response.send_message(embed=nova_embed("cASES", "nO mODERATION cASES fOUND!"), ephemeral=True)
         return
     desc = ""
     for i, c in enumerate(cases, 1):
         desc += f"**{i}.** `{c['action']}` by {c['user']} in {c['channel']} • {c['time'].strftime('%Y-%m-%d %H:%M:%S')}\n"
     await interaction.response.send_message(embed=nova_embed("cASES", desc))
+    await interaction.response.send_message("Usage: /case - Shows the last 20 moderation actions. Only mods/admins can use this.", ephemeral=True)
 
 @bot.command()
 async def snipe(ctx):
@@ -1750,6 +1807,7 @@ async def slowmode(ctx, seconds: int = 0):
         return
     await ctx.channel.edit(slowmode_delay=seconds)
     await ctx.send(embed=nova_embed("sLOWMODE", f"sLOWMODE sET tO {seconds} sECONDS iN {ctx.channel.mention}!"))
+    await ctx.send("Usage: ?slowmode [seconds] - Sets slowmode in the current channel. Only mods/admins can use this.")
 
 @bot.tree.command(name="slowmode", description="Set slowmode in the current channel (admin only)")
 @app_commands.describe(seconds="Number of seconds for slowmode")
@@ -1759,7 +1817,8 @@ async def slowmode_slash(interaction: discord.Interaction, seconds: int = 0):
         await interaction.response.send_message(embed=nova_embed("sLOWMODE", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
         return
     await interaction.channel.edit(slowmode_delay=seconds)
-    await interaction.response.send_message(embed=nova_embed("sLOWMODE", f"sLOWMODE sET tO {seconds} sECONDS iN {interaction.channel.mention}!"))
+    await interaction.response.send_message(embed=nova_embed("sLOWMODE", f"sLOWMODE sET tO {seconds} sECONDS iN {interaction.channel.mention}!"), ephemeral=True)
+    await interaction.followup.send("Usage: /slowmode [seconds] - Sets slowmode in the current channel. Only mods/admins can use this.", ephemeral=True)
 
 # Economy
 @bot.command()
@@ -2926,6 +2985,15 @@ async def on_message_delete(message):
         'author': str(message.author),
         'time': message.created_at
     }
+    # Chat logs for mods
+    if CHAT_LOGS_CHANNEL_ID:
+        guild = message.guild
+        if guild:
+            log_channel = guild.get_channel(CHAT_LOGS_CHANNEL_ID)
+            if log_channel:
+                embed = nova_embed("🗑️ Message Deleted", f"**Author:** {message.author}\n**Channel:** {message.channel.mention}\n**Content:** {message.content}")
+                embed.timestamp = datetime.now(timezone.utc)
+                await log_channel.send(embed=embed)
 
 @bot.event
 async def on_message_edit(before, after):
@@ -2936,6 +3004,15 @@ async def on_message_edit(before, after):
         'author': str(before.author),
         'time': before.edited_at or before.created_at
     }
+    # Chat logs for mods
+    if CHAT_LOGS_CHANNEL_ID:
+        guild = before.guild
+        if guild:
+            log_channel = guild.get_channel(CHAT_LOGS_CHANNEL_ID)
+            if log_channel:
+                embed = nova_embed("✏️ Message Edited", f"**Author:** {before.author}\n**Channel:** {before.channel.mention}\n**Before:** {before.content}\n**After:** {after.content}")
+                embed.timestamp = datetime.now(timezone.utc)
+                await log_channel.send(embed=embed)
 
 @bot.event
 async def on_raw_reaction_remove(payload):
@@ -3022,152 +3099,120 @@ async def dmtest(ctx):
         await ctx.send(embed=nova_embed("dM tEST", "yOU'RE iN a sERVER, hONEY! 💅"))
 
 @bot.command()
-async def imposter(ctx):
-    if ctx.guild is None:
-        await ctx.send(embed=nova_embed("iMPOSTER", "tHIS cOMMAND mUST bE uSED iN a sERVER cHANNEL!"))
+async def endimposter(ctx):
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("eND iMPOSTER", "yOU dON'T hAVE pERMISSION!"))
         return
-    word_list = [
-        "banana", "apple", "grape", "peach", "lemon", "carrot", "onion", "potato", "pizza", "burger",
-        "sushi", "taco", "pasta", "croissant", "ramen", "falafel", "burrito", "cheesecake", "donut", "waffle",
-        "mountain", "beach", "desert", "forest", "island", "volcano", "river", "ocean", "cave", "valley",
-        "laptop", "phone", "keyboard", "camera", "guitar", "piano", "bicycle", "skateboard", "umbrella", "backpack",
-        "dragon", "unicorn", "zombie", "robot", "pirate", "wizard", "ghost", "alien", "vampire", "mermaid",
-        "diamond", "gold", "ruby", "sapphire", "emerald", "pearl", "opal", "jade", "topaz", "amethyst"
-    ]
-    join_msg = await ctx.send(embed=nova_embed("iMPOSTER gAME", f"rEACT wITH 🕵️ tO jOIN!\n\nyOU hAVE 30 sECONDS..."))
-    await join_msg.add_reaction("🕵️")
-    reacted_users = set()
-    def check(reaction, user):
-        return (
-            reaction.message.id == join_msg.id and
-            str(reaction.emoji) == "🕵️" and
-            not user.bot and
-            user not in reacted_users
-        )
-    try:
-        while True:
-            reaction, user = await bot.wait_for("reaction_add", timeout=30.0, check=check)
-            reacted_users.add(user)
-    except asyncio.TimeoutError:
-        pass
-    players = list(reacted_users)
-    if len(players) < 3:
-        await ctx.send(embed=nova_embed("iMPOSTER", "nOT eNOUGH pLAYERS rEACTED! gAME cANCELLED, bABY!"))
+    game = IMPOSTER_GAMES.get(ctx.channel.id)
+    if not game or not game.active:
+        await ctx.send(embed=nova_embed("eND iMPOSTER", "nO aCTIVE iMPOSTER gAME tO eND!"))
         return
-    imposter = random.choice(players)
-    secret_word = random.choice(word_list)
-    imposter_word = random.choice([w for w in word_list if w != secret_word])
-    failed = []
-    for m in players:
-        try:
-            if m == imposter:
-                await m.send(embed=nova_embed("iMPOSTER wORD", f"yOU aRE tHE iMPOSTER! yOUR wORD iS: **{imposter_word}**"))
-            else:
-                await m.send(embed=nova_embed("iMPOSTER wORD", f"yOUR wORD iS: **{secret_word}**"))
-        except Exception:
-            failed.append(m.display_name)
-    joined_names = ", ".join([f"**{u.display_name}**" for u in players])
-    await ctx.send(embed=nova_embed("iMPOSTER", f"aLL sECRET wORDS hAVE bEEN sENT!\n\n**pLAYERS:** {joined_names}"))
-    if failed:
-        await ctx.send(embed=nova_embed("iMPOSTER", f"cOULD nOT dM: {', '.join(failed)}"))
-    # --- Rounds ---
-    round_num = 1
-    max_rounds = 10
-    game_over = False
-    while round_num <= max_rounds and not game_over:
-        await ctx.send(embed=nova_embed(f"rOUND {round_num}", "eVERYONE, sAY yOUR wORD! nOVA wILL tAG yOU oNE bY oNE."))
-        for p in players:
-            await ctx.send(f"{p.mention}, iT'S yOUR tURN tO sAY yOUR wORD!")
-            def msg_check(m):
-                return m.author == p and m.channel == ctx.channel
-            try:
-                await bot.wait_for("message", timeout=60.0, check=msg_check)
-            except asyncio.TimeoutError:
-                await ctx.send(f"{p.mention} dID nOT rESPOND iN tIME!")
-        # Voting to continue or end
-        vote_msg = await ctx.send(embed=nova_embed("cONTINUE oR eND?", "rEACT wITH ✅ tO cONTINUE, ❌ tO eND tHE gAME!"))
-        await vote_msg.add_reaction("✅")
-        await vote_msg.add_reaction("❌")
-        await asyncio.sleep(20)  # 20 seconds to vote
-        vote_msg = await ctx.channel.fetch_message(vote_msg.id)
-        cont_votes = 0
-        end_votes = 0
-        for reaction in vote_msg.reactions:
-            if str(reaction.emoji) == "✅":
-                cont_votes = reaction.count - 1
-            elif str(reaction.emoji) == "❌":
-                end_votes = reaction.count - 1
-        if end_votes > cont_votes:
-            game_over = True
-            await ctx.send(embed=nova_embed("gAME eNDING", "mAJORITY vOTED tO eND tHE gAME!"))
-        else:
-            round_num += 1
-    # --- Final Voting ---
-    await ctx.send(embed=nova_embed("vOTE tHE iMPOSTER!", "rEACT wITH tHE eMOJI fOR wHO yOU tHINK iS tHE iMPOSTER!"))
-    emojis = [chr(0x1F1E6 + i) for i in range(len(players))]  # 🇦, 🇧, 🇨, ...
-    vote_embed = discord.Embed(title="vOTE tHE iMPOSTER!", description="\n".join([f"{emojis[i]} {players[i].mention}" for i in range(len(players))]), color=0xff69b4)
-    vote_embed.set_footer(text="nOVA")
-    vote_msg = await ctx.send(embed=vote_embed)
-    for e in emojis:
-        await vote_msg.add_reaction(e)
-    await asyncio.sleep(20)  # 20 seconds to vote
-    vote_msg = await ctx.channel.fetch_message(vote_msg.id)
-    votes = [0] * len(players)
-    for reaction in vote_msg.reactions:
-        if reaction.emoji in emojis:
-            idx = emojis.index(reaction.emoji)
-            votes[idx] = reaction.count - 1
-    max_votes = max(votes)
-    if votes.count(max_votes) > 1:
-        await ctx.send(embed=nova_embed("nO wINNER", "iT'S a tIE! nO oNE wINS!"))
-        return
-    voted_idx = votes.index(max_votes)
-    voted_player = players[voted_idx]
-    if voted_player == imposter:
-        # Crew wins
-        for p in players:
-            if p != imposter:
-                change_balance(p.id, 200)
-        await ctx.send(embed=nova_embed("cREW wINS!", f"tHE cREW fOUND tHE iMPOSTER!\n\n{imposter.mention} wAS tHE iMPOSTER!\n\n{', '.join([pl.mention for pl in players if pl != imposter])} gET 200 {CURRENCY_NAME} eACH!"))
-    else:
-        # Imposter wins
-        change_balance(imposter.id, 500)
-        await ctx.send(embed=nova_embed("iMPOSTER wINS!", f"{imposter.mention} sURVIVED! tHEY gET 500 {CURRENCY_NAME}!"))
+    game.end()
+    del IMPOSTER_GAMES[ctx.channel.id]
+    await ctx.send(embed=nova_embed("eND iMPOSTER", "tHE iMPOSTER gAME hAS bEEN eNDED bY a mOD!"))
 
-@bot.tree.command(name="imposter", description="Start an imposter game and DM secret words!")
-async def imposter_slash(interaction: discord.Interaction):
-    if interaction.guild is None or interaction.channel is None:
-        await interaction.response.send_message(embed=nova_embed("iMPOSTER", "tHIS cOMMAND mUST bE uSED iN a sERVER cHANNEL!"), ephemeral=True)
+@bot.command()
+async def setchatlogs(ctx, channel: discord.TextChannel = None):
+    """Set the chat logs channel for mod-only logs."""
+    if not has_mod_or_admin(ctx):
+        await ctx.send("You don't have permission to use this command.")
         return
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    # Get all non-bot members who can see the channel
-    channel = interaction.channel
-    if not hasattr(channel, 'members'):
-        await interaction.followup.send(embed=nova_embed("iMPOSTER", "cOULD nOT gET cHANNEL mEMBERS!"), ephemeral=True)
+    global CHAT_LOGS_CHANNEL_ID
+    if channel is None:
+        CHAT_LOGS_CHANNEL_ID = None
+        save_config()
+        await ctx.send("Chat logs channel unset.")
         return
-    members = [m for m in channel.members if not m.bot]
-    if len(members) < 3:
-        await interaction.followup.send(embed=nova_embed("iMPOSTER", "nEED aT lEAST 3 pEOPLE tO pLAY!"), ephemeral=True)
+    CHAT_LOGS_CHANNEL_ID = channel.id
+    save_config()
+    await ctx.send(f"Chat logs channel set to {channel.mention}.")
+
+@bot.tree.command(name="setchatlogs", description="Set the chat logs channel for mod-only logs.")
+@app_commands.describe(channel="The channel to log deleted/edited messages")
+async def setchatlogs_slash(interaction: discord.Interaction, channel: discord.TextChannel):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
         return
-    imposter = random.choice(members)
-    word_list = ["banana", "apple", "grape", "peach", "lemon", "carrot", "onion", "potato", "pizza", "burger"]
-    secret_word = random.choice(word_list)
-    imposter_word = random.choice([w for w in word_list if w != secret_word])
-    # Send game start message
-    msg = await channel.send(embed=nova_embed("iMPOSTER gAME", f"rEACT wITH 🕵️ tO tHIS mESSAGE tO jOIN!\n\nyOU hAVE 45 sECONDS..."))
-    await msg.add_reaction("🕵️")
-    failed = []
-    for m in members:
-        try:
-            if m == imposter:
-                await m.send(embed=nova_embed("iMPOSTER wORD", f"yOU aRE tHE iMPOSTER! yOUR wORD iS: **{imposter_word}**"))
-            else:
-                await m.send(embed=nova_embed("iMPOSTER wORD", f"yOUR wORD iS: **{secret_word}**"))
-        except Exception:
-            failed.append(m.display_name)
-    if failed:
-        await channel.send(embed=nova_embed("iMPOSTER", f"cOULD nOT dM: {', '.join(failed)}"))
-    await channel.send(embed=nova_embed("iMPOSTER", "aLL sECRET wORDS hAVE bEEN sENT!"))
-    await interaction.followup.send(embed=nova_embed("iMPOSTER", "gAME sTARTED! cHECK yOUR dMS!"), ephemeral=True)
+    global CHAT_LOGS_CHANNEL_ID
+    CHAT_LOGS_CHANNEL_ID = channel.id
+    save_config()
+    await interaction.response.send_message(f"Chat logs channel set to {channel.mention}.", ephemeral=True)
+
+# Welcome/Farewell system
+WELCOME_CHANNEL_ID = None  # Set by ?setwelcome
+FAREWELL_CHANNEL_ID = None  # Set by ?setfarewell
+
+@bot.command()
+async def setwelcome(ctx, channel: discord.TextChannel = None):
+    """Set the welcome channel."""
+    if not has_mod_or_admin(ctx):
+        await ctx.send("You don't have permission to use this command.")
+        return
+    global WELCOME_CHANNEL_ID
+    if channel is None:
+        WELCOME_CHANNEL_ID = None
+        save_config()
+        await ctx.send("Welcome channel unset.")
+        return
+    WELCOME_CHANNEL_ID = channel.id
+    save_config()
+    await ctx.send(f"Welcome channel set to {channel.mention}.")
+
+@bot.tree.command(name="setwelcome", description="Set the welcome channel.")
+@app_commands.describe(channel="The channel to send welcome messages")
+async def setwelcome_slash(interaction: discord.Interaction, channel: discord.TextChannel):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    global WELCOME_CHANNEL_ID
+    WELCOME_CHANNEL_ID = channel.id
+    save_config()
+    await interaction.response.send_message(f"Welcome channel set to {channel.mention}.", ephemeral=True)
+
+@bot.command()
+async def setfarewell(ctx, channel: discord.TextChannel = None):
+    """Set the farewell channel."""
+    if not has_mod_or_admin(ctx):
+        await ctx.send("You don't have permission to use this command.")
+        return
+    global FAREWELL_CHANNEL_ID
+    if channel is None:
+        FAREWELL_CHANNEL_ID = None
+        save_config()
+        await ctx.send("Farewell channel unset.")
+        return
+    FAREWELL_CHANNEL_ID = channel.id
+    save_config()
+    await ctx.send(f"Farewell channel set to {channel.mention}.")
+
+@bot.tree.command(name="setfarewell", description="Set the farewell channel.")
+@app_commands.describe(channel="The channel to send farewell messages")
+async def setfarewell_slash(interaction: discord.Interaction, channel: discord.TextChannel):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    global FAREWELL_CHANNEL_ID
+    FAREWELL_CHANNEL_ID = channel.id
+    save_config()
+    await interaction.response.send_message(f"Farewell channel set to {channel.mention}.", ephemeral=True)
+
+@bot.event
+async def on_member_join(member):
+    if WELCOME_CHANNEL_ID:
+        channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
+        if channel:
+            embed = nova_embed("👋 wELCOME!", f"wELCOME tO tHE sERVER, {member.mention}! mAKE yOURSELF aT hOME! 💖")
+            await channel.send(embed=embed)
+
+@bot.event
+async def on_member_remove(member):
+    if FAREWELL_CHANNEL_ID:
+        channel = member.guild.get_channel(FAREWELL_CHANNEL_ID)
+        if channel:
+            embed = nova_embed("👋 fAREWELL!", f"{member.display_name} hAS lEFT tHE sERVER. wE'LL mISS yOU! 😢")
+            await channel.send(embed=embed)
 
 bot.run(TOKEN)
