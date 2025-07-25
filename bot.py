@@ -38,6 +38,7 @@ BIRTHDAY_FILE = "birthdays.json"
 RELATIONSHIPS_FILE = "relationships.json"
 REMINDERS_FILE = "reminders.json"
 THRIFT_FILE = "thrift.json"
+AFK_FILE = "afk.json"
 
 balances = {}
 user_xp = {}
@@ -226,25 +227,28 @@ INTERNATIONAL_DAYS = {
 
 def load_config():
     """Load configuration from CONFIG_FILE into the global config dict."""
-    global config, CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID
+    global config, CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID
     try:
         with open(CONFIG_FILE, "r") as f:
             config = json.load(f)
             CHAT_LOGS_CHANNEL_ID = config.get("chat_logs_channel_id")
             WELCOME_CHANNEL_ID = config.get("welcome_channel_id")
             FAREWELL_CHANNEL_ID = config.get("farewell_channel_id")
+            RUNWAY_CHANNEL_ID = config.get("runway_channel_id")
     except FileNotFoundError:
-        config = {"mod_role_id": None, "admin_role_id": None, "chat_logs_channel_id": None, "welcome_channel_id": None, "farewell_channel_id": None}
+        config = {"mod_role_id": None, "admin_role_id": None, "chat_logs_channel_id": None, "welcome_channel_id": None, "farewell_channel_id": None, "runway_channel_id": None}
         CHAT_LOGS_CHANNEL_ID = None
         WELCOME_CHANNEL_ID = None
         FAREWELL_CHANNEL_ID = None
+        RUNWAY_CHANNEL_ID = None
 
 def save_config():
     """Save the current config dict to CONFIG_FILE."""
-    global CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID
+    global CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID
     config["chat_logs_channel_id"] = CHAT_LOGS_CHANNEL_ID
     config["welcome_channel_id"] = WELCOME_CHANNEL_ID
     config["farewell_channel_id"] = FAREWELL_CHANNEL_ID
+    config["runway_channel_id"] = RUNWAY_CHANNEL_ID
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f)
 
@@ -331,6 +335,38 @@ def nova_embed(title, description=None, color=0xff69b4, footer="nOVA"):
     embed.set_footer(text=footer)
     return embed
 
+# AFK system persistence
+def load_afk():
+    """Load AFK status from AFK_FILE into the global AFK_STATUS dict."""
+    global AFK_STATUS
+    try:
+        with open(AFK_FILE, "r") as f:
+            data = json.load(f)
+            # Convert string keys back to int and datetime strings back to datetime objects
+            AFK_STATUS = {}
+            for user_id_str, afk_data in data.items():
+                user_id = int(user_id_str)
+                AFK_STATUS[user_id] = {
+                    "reason": afk_data["reason"],
+                    "since": datetime.fromisoformat(afk_data["since"]),
+                    "mentions": set(afk_data.get("mentions", []))
+                }
+    except FileNotFoundError:
+        AFK_STATUS = {}
+
+def save_afk():
+    """Save the current AFK_STATUS dict to AFK_FILE."""
+    # Convert datetime objects to ISO format strings and sets to lists for JSON serialization
+    data = {}
+    for user_id, afk_data in AFK_STATUS.items():
+        data[str(user_id)] = {
+            "reason": afk_data["reason"],
+            "since": afk_data["since"].isoformat(),
+            "mentions": list(afk_data["mentions"])
+        }
+    with open(AFK_FILE, "w") as f:
+        json.dump(data, f)
+
 # Example usage in commands:
 # await ctx.send(embed=nova_embed("TITLE", "description"))
 # await interaction.response.send_message(embed=nova_embed("TITLE", "description"))
@@ -345,6 +381,7 @@ async def on_ready():
     load_config()
     load_balances()
     load_xp()
+    load_afk()
     await bot.tree.sync()
     print(f"{bot.user} is online and commands synced!")
 
@@ -381,8 +418,9 @@ async def on_message(message):
     # AFK return logic
     if message.author.id in AFK_STATUS:
         afk = AFK_STATUS.pop(message.author.id)
+        save_afk()  # Save AFK data after removing user
         since = afk["since"]
-        delta = datetime.now(timezone.utc) - since
+        delta = datetime.now(datetime.timezone.utc) - since
         mins = int(delta.total_seconds() // 60)
         hours = mins // 60
         mins = mins % 60
@@ -394,11 +432,12 @@ async def on_message(message):
     for uid in mentioned_ids:
         if uid in AFK_STATUS:
             AFK_STATUS[uid]["mentions"].add(message.author.id)
+            save_afk()  # Save AFK data after adding mention
             afk = AFK_STATUS[uid]
             member = message.guild.get_member(uid)
             if member:
                 since = afk["since"]
-                delta = datetime.now(timezone.utc) - since
+                delta = datetime.now(datetime.timezone.utc) - since
                 mins = int(delta.total_seconds() // 60)
                 hours = mins // 60
                 mins = mins % 60
@@ -621,7 +660,7 @@ async def balance_slash(interaction: discord.Interaction):
 
 @bot.command()
 async def beg(ctx):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(datetime.timezone.utc)
     user_id = ctx.author.id
     last = beg_cooldowns.get(user_id)
     if last and now - last < timedelta(minutes=10):
@@ -668,7 +707,7 @@ async def daily_slash(interaction: discord.Interaction):
 
 @bot.command()
 async def work(ctx):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(datetime.timezone.utc)
     user_id = ctx.author.id
     last = work_cooldowns.get(user_id)
     if last and now - last < timedelta(minutes=20):
@@ -718,30 +757,33 @@ async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
     try:
         await member.kick(reason=reason)
         await ctx.send(f"Kicked {member} for: {reason}")
-        await ctx.send("Usage: ?kick @user [reason] - Kicks a member from the server. Only mods/admins can use this.")
     except Exception as e:
         await ctx.send(f"Failed to kick: {e}")
 
 @bot.command()
-async def ban(ctx, member: discord.Member, *, reason="No reason provided"):
+async def ban(ctx, member: discord.Member = None, *, reason="No reason provided"):
     if not has_mod_or_admin(ctx):
         await ctx.send("You don't have permission to use this command.")
+        return
+    if member is None:
+        await ctx.send("Usage: ?ban @user [reason] - Bans a member from the server. Only mods/admins can use this.")
         return
     try:
         await member.ban(reason=reason)
         await ctx.send(f"Banned {member} for: {reason}")
-        await ctx.send("Usage: ?ban @user [reason] - Bans a member from the server. Only mods/admins can use this.")
     except Exception as e:
         await ctx.send(f"Failed to ban: {e}")
 
 @bot.command()
-async def clear(ctx, amount: int = 5):
+async def clear(ctx, amount: int = None):
     if not has_mod_or_admin(ctx):
         await ctx.send("You don't have permission to use this command.")
         return
+    if amount is None:
+        await ctx.send("Usage: ?clear [amount] - Deletes a number of messages. Only mods/admins can use this.")
+        return
     deleted = await ctx.channel.purge(limit=amount)
     await ctx.send(f"Cleared {len(deleted)} messages", delete_after=3)
-    await ctx.send("Usage: ?clear [amount] - Deletes a number of messages. Only mods/admins can use this.")
 
 @bot.command()
 async def reactionroles(ctx):
@@ -775,7 +817,7 @@ async def nicki(ctx):
         description=lyric,
         color=0xff69b4
     )
-    embed.set_footer(text="nOVA sAYS: sLAY! 💅")
+    # Removed footer message per user request
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -811,6 +853,12 @@ async def spotify(ctx, member: discord.Member = None):
             return
     await ctx.send(f"{member.display_name} is not listening to Spotify right now.")
 
+# Alias for spotify command
+@bot.command(name="fm")
+async def fm(ctx, member: discord.Member = None):
+    """Show Spotify status for a user (alias for ?spotify)"""
+    await spotify(ctx, member)
+
 # Load environment variables
 load_dotenv()
 
@@ -823,7 +871,7 @@ if not TOKEN:
 # Slash command version of beg
 @bot.tree.command(name="beg", description="Beg for money (10 min cooldown)")
 async def beg_slash(interaction: discord.Interaction):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(datetime.timezone.utc)
     user_id = interaction.user.id
     last = beg_cooldowns.get(user_id)
     if last and now - last < timedelta(minutes=10):
@@ -841,7 +889,7 @@ async def beg_slash(interaction: discord.Interaction):
 # Slash command version of work
 @bot.tree.command(name="work", description="Work a job to earn money (20 min cooldown)")
 async def work_slash(interaction: discord.Interaction):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(datetime.timezone.utc)
     user_id = interaction.user.id
     last = work_cooldowns.get(user_id)
     if last and now - last < timedelta(minutes=20):
@@ -898,7 +946,6 @@ async def kick_slash(interaction: discord.Interaction, member: discord.Member, r
     try:
         await member.kick(reason=reason)
         await interaction.response.send_message(f"Kicked {member} for: {reason}")
-        await interaction.followup.send("Usage: /kick @user [reason] - Kicks a member from the server. Only mods/admins can use this.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"Failed to kick: {e}", ephemeral=True)
 
@@ -913,7 +960,6 @@ async def ban_slash(interaction: discord.Interaction, member: discord.Member, re
     try:
         await member.ban(reason=reason)
         await interaction.response.send_message(f"Banned {member} for: {reason}")
-        await interaction.followup.send("Usage: /ban @user [reason] - Bans a member from the server. Only mods/admins can use this.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"Failed to ban: {e}", ephemeral=True)
 
@@ -991,6 +1037,12 @@ async def spotify_slash(interaction: discord.Interaction, member: discord.Member
             await msg.add_reaction("👎")
             return
     await interaction.response.send_message(f"{member.display_name} is not listening to Spotify right now.")
+
+# Slash command for fm (alias for spotify)
+@bot.tree.command(name="fm", description="Show Spotify status for a user (alias for /spotify)")
+@app_commands.describe(member="The member to check (optional)")
+async def fm_slash(interaction: discord.Interaction, member: discord.Member = None):
+    await spotify_slash(interaction, member)
 
 # =========================
 # Command Stubs for All Requested Features
@@ -1608,16 +1660,16 @@ pending_adoptions = {}  # user_id: adopter_id
 
 @bot.command()
 async def afk(ctx, *, reason: str = "aFK"):
-    AFK_STATUS[ctx.author.id] = {"reason": reason, "since": datetime.now(timezone.utc), "mentions": set()}
+    AFK_STATUS[ctx.author.id] = {"reason": reason, "since": datetime.now(datetime.timezone.utc), "mentions": set()}
+    save_afk()  # Save AFK data after setting status
     await ctx.send(embed=nova_embed("aFK", f"{ctx.author.display_name} iS nOW aFK: {reason}"))
-    await ctx.send("Usage: ?afk [reason] - Sets your AFK status. Mentioning you will notify the sender. Use any message to remove AFK.")
 
-@bot.tree.command(name="afk", description="Set your AFK status with an optional message")
-@app_commands.describe(reason="Why are you AFK?")
+@bot.tree.command(name="afk", description="Set your AFK status")
+@app_commands.describe(reason="Reason for being AFK")
 async def afk_slash(interaction: discord.Interaction, reason: str = "aFK"):
-    AFK_STATUS[interaction.user.id] = {"reason": reason, "since": datetime.now(timezone.utc), "mentions": set()}
-    await interaction.response.send_message(embed=nova_embed("aFK", f"{interaction.user.display_name} iS nOW aFK: {reason}"), ephemeral=True)
-    await interaction.followup.send("Usage: /afk [reason] - Sets your AFK status. Mentioning you will notify the sender. Use any message to remove AFK.", ephemeral=True)
+    AFK_STATUS[interaction.user.id] = {"reason": reason, "since": datetime.now(datetime.timezone.utc), "mentions": set()}
+    save_afk()  # Save AFK data after setting status
+    await interaction.response.send_message(embed=nova_embed("aFK", f"{interaction.user.display_name} iS nOW aFK: {reason}"))
 
 class MentionsView(View):
     def __init__(self, user_id):
@@ -2025,13 +2077,17 @@ async def birthday(ctx, user: discord.Member = None):
     birthdays = load_birthdays()
     bday = birthdays.get(str(user.id))
     if bday:
-        await ctx.send(f"{user.display_name}'s birthday is {bday}!")
+        await ctx.send(embed=nova_embed("🎂 bIRTHDAY", f"{user.display_name}'s birthday is {bday}!"))
     else:
-        await ctx.send(f"No birthday set for {user.display_name}.")
+        await ctx.send(embed=nova_embed("🎂 bIRTHDAY", f"No birthday set for {user.display_name}."))
 
-@bot.command()
-async def bday(ctx, user: discord.Member = None, date: str = None):
-    await ctx.send("Birthday shortcut feature coming soon!")
+# Alias for birthday command
+@bot.command(name="bday")
+async def bday(ctx, user: discord.Member = None):
+    """Show a user's birthday. Usage: ?bday [@user] (alias for ?birthday)"""
+    await birthday(ctx, user)
+
+
 
 @bot.command()
 async def setbday(ctx, date: str):
@@ -2042,23 +2098,27 @@ async def setbday(ctx, date: str):
         assert 1 <= month <= 12
         assert 1 <= day <= 31
     except Exception:
-        await ctx.send("Please use the format DD-MM, e.g. 15-04 for April 15th.")
+        await ctx.send(embed=nova_embed("🎂 sET bIRTHDAY", "Please use the format DD-MM, e.g. 15-04 for April 15th."))
         return
     birthdays = load_birthdays()
     birthdays[str(ctx.author.id)] = date
     save_birthdays(birthdays)
-    await ctx.send(f"Birthday set to {date}!")
+    await ctx.send(embed=nova_embed("🎂 sET bIRTHDAY", f"Birthday set to {date}!"))
 
-@bot.command()
-async def setbirthday(ctx, *, date: str):
-    await ctx.send("Set birthday (alias) feature coming soon!")
+# Alias for setbday command
+@bot.command(name="setbirthday")
+async def setbirthday(ctx, date: str):
+    """Set your birthday. Usage: ?setbirthday DD-MM (alias for ?setbday)"""
+    await setbday(ctx, date)
+
+
 
 @bot.command()
 async def birthdays(ctx):
     """List all birthdays in the server."""
     birthdays = load_birthdays()
     if not birthdays:
-        await ctx.send("No birthdays set yet!")
+        await ctx.send(embed=nova_embed("🎂 bIRTHDAYS", "No birthdays set yet!"))
         return
     lines = []
     for user_id, date in birthdays.items():
@@ -2066,9 +2126,38 @@ async def birthdays(ctx):
         if member:
             lines.append(f"{member.display_name}: {date}")
     if lines:
-        await ctx.send("**Server Birthdays:**\n" + "\n".join(lines))
+        await ctx.send(embed=nova_embed("🎂 sERVER bIRTHDAYS", "\n".join(lines)))
     else:
-        await ctx.send("No birthdays set for current server members.")
+        await ctx.send(embed=nova_embed("🎂 bIRTHDAYS", "No birthdays set for current server members."))
+
+# Slash command for birthday
+@bot.tree.command(name="birthday", description="Show a user's birthday")
+@app_commands.describe(user="The user to check (optional)")
+async def birthday_slash(interaction: discord.Interaction, user: discord.Member = None):
+    user = user or interaction.user
+    birthdays = load_birthdays()
+    bday = birthdays.get(str(user.id))
+    if bday:
+        await interaction.response.send_message(embed=nova_embed("🎂 bIRTHDAY", f"{user.display_name}'s birthday is {bday}!"))
+    else:
+        await interaction.response.send_message(embed=nova_embed("🎂 bIRTHDAY", f"No birthday set for {user.display_name}."))
+
+# Slash command for setbirthday
+@bot.tree.command(name="setbirthday", description="Set your birthday")
+@app_commands.describe(date="Your birthday in DD-MM format (e.g. 15-04 for April 15th)")
+async def setbirthday_slash(interaction: discord.Interaction, date: str):
+    # Basic validation
+    try:
+        day, month = map(int, date.split("-"))
+        assert 1 <= month <= 12
+        assert 1 <= day <= 31
+    except Exception:
+        await interaction.response.send_message(embed=nova_embed("🎂 sET bIRTHDAY", "Please use the format DD-MM, e.g. 15-04 for April 15th."), ephemeral=True)
+        return
+    birthdays = load_birthdays()
+    birthdays[str(interaction.user.id)] = date
+    save_birthdays(birthdays)
+    await interaction.response.send_message(embed=nova_embed("🎂 sET bIRTHDAY", f"Birthday set to {date}!"))
 
 @bot.command()
 async def today(ctx):
@@ -2360,6 +2449,7 @@ async def setrunway(ctx, channel: discord.TextChannel):
         return
     global RUNWAY_CHANNEL_ID
     RUNWAY_CHANNEL_ID = channel.id
+    save_config()
     await ctx.send(embed=nova_embed("sET rUNWAY", f"rUNWAY cHANNEL sET tO {channel.mention}!"))
 
 @bot.tree.command(name="setrunway", description="Set the runway channel (admin/mod only)")
@@ -2371,6 +2461,7 @@ async def setrunway_slash(interaction: discord.Interaction, channel: discord.Tex
         return
     global RUNWAY_CHANNEL_ID
     RUNWAY_CHANNEL_ID = channel.id
+    save_config()
     await interaction.response.send_message(embed=nova_embed("sET rUNWAY", f"rUNWAY cHANNEL sET tO {channel.mention}!"), ephemeral=True)
 
 @bot.command()
@@ -2992,7 +3083,7 @@ async def on_message_delete(message):
             log_channel = guild.get_channel(CHAT_LOGS_CHANNEL_ID)
             if log_channel:
                 embed = nova_embed("🗑️ Message Deleted", f"**Author:** {message.author}\n**Channel:** {message.channel.mention}\n**Content:** {message.content}")
-                embed.timestamp = datetime.now(timezone.utc)
+                embed.timestamp = datetime.now(datetime.timezone.utc)
                 await log_channel.send(embed=embed)
 
 @bot.event
@@ -3011,7 +3102,7 @@ async def on_message_edit(before, after):
             log_channel = guild.get_channel(CHAT_LOGS_CHANNEL_ID)
             if log_channel:
                 embed = nova_embed("✏️ Message Edited", f"**Author:** {before.author}\n**Channel:** {before.channel.mention}\n**Before:** {before.content}\n**After:** {after.content}")
-                embed.timestamp = datetime.now(timezone.utc)
+                embed.timestamp = datetime.now(datetime.timezone.utc)
                 await log_channel.send(embed=embed)
 
 @bot.event
@@ -3038,7 +3129,7 @@ async def on_raw_reaction_remove(payload):
         'user': str(user),
         'message_id': payload.message_id,
         'jump_url': jump_url,
-        'time': datetime.now(timezone.utc)
+        'time': datetime.now(datetime.timezone.utc)
     }
 
 @bot.command()
@@ -3214,5 +3305,193 @@ async def on_member_remove(member):
         if channel:
             embed = nova_embed("👋 fAREWELL!", f"{member.display_name} hAS lEFT tHE sERVER. wE'LL mISS yOU! 😢")
             await channel.send(embed=embed)
+@bot.command()
+async def imposter(ctx):
+    if ctx.guild is None:
+        await ctx.send(embed=nova_embed("iMPOSTER", "tHIS cOMMAND mUST bE uSED iN a sERVER cHANNEL!"))
+        return
+    word_list = [
+        "banana", "apple", "grape", "peach", "lemon", "carrot", "onion", "potato", "pizza", "burger",
+        "sushi", "taco", "pasta", "croissant", "ramen", "falafel", "burrito", "cheesecake", "donut", "waffle",
+        "mountain", "beach", "desert", "forest", "island", "volcano", "river", "ocean", "cave", "valley",
+        "laptop", "phone", "keyboard", "camera", "guitar", "piano", "bicycle", "skateboard", "umbrella", "backpack",
+        "dragon", "unicorn", "zombie", "robot", "pirate", "wizard", "ghost", "alien", "vampire", "mermaid",
+        "diamond", "gold", "ruby", "sapphire", "emerald", "pearl", "opal", "jade", "topaz", "amethyst"
+    ]
+    join_msg = await ctx.send(embed=nova_embed("iMPOSTER gAME", f"rEACT wITH 🕵️ tO jOIN!\n\nyOU hAVE 30 sECONDS..."))
+    await join_msg.add_reaction("🕵️")
+    reacted_users = set()
+    def check(reaction, user):
+        return (
+            reaction.message.id == join_msg.id and
+            str(reaction.emoji) == "🕵️" and
+            not user.bot and
+            user not in reacted_users
+        )
+    
+    try:
+        while True:
+            reaction, user = await bot.wait_for("reaction_add", timeout=30.0, check=check)
+            reacted_users.add(user)
+    except asyncio.TimeoutError:
+        pass
+    players = list(reacted_users)
+    if len(players) < 3:
+        await ctx.send(embed=nova_embed("iMPOSTER", "nOT eNOUGH pLAYERS rEACTED! gAME cANCELLED, bABY!"))
+        return
+    imposter = random.choice(players)
+    secret_word = random.choice(word_list)
+    imposter_word = random.choice([w for w in word_list if w != secret_word])
+    failed = []
+    for m in players:
+        try:
+            if m == imposter:
+                await m.send(embed=nova_embed("iMPOSTER wORD", f"yOU aRE tHE iMPOSTER! yOUR wORD iS: **{imposter_word}**"))
+            else:
+                await m.send(embed=nova_embed("iMPOSTER wORD", f"yOUR wORD iS: **{secret_word}**"))
+        except Exception:
+            failed.append(m.display_name)
+    joined_names = ", ".join([f"**{u.display_name}**" for u in players])
+    await ctx.send(embed=nova_embed("iMPOSTER", f"aLL sECRET wORDS hAVE bEEN sENT!\n\n**pLAYERS:** {joined_names}"))
+    if failed:
+        await ctx.send(embed=nova_embed("iMPOSTER", f"cOULD nOT dM: {', '.join(failed)}"))
+    # --- Rounds ---
+    round_num = 1
+    max_rounds = 10
+    game_over = False
+    while round_num <= max_rounds and not game_over:
+        await ctx.send(embed=nova_embed(f"rOUND {round_num}", "eVERYONE, sAY yOUR wORD! nOVA wILL tAG yOU oNE bY oNE."))
+        for p in players:
+            await ctx.send(f"{p.mention}, iT'S yOUR tURN tO sAY yOUR wORD!")
+            def msg_check(m):
+                return m.author == p and m.channel == ctx.channel
+            try:
+                await bot.wait_for("message", timeout=60.0, check=msg_check)
+            except asyncio.TimeoutError:
+                await ctx.send(f"{p.mention} dID nOT rESPOND iN tIME!")
+        # Voting to continue or end
+        vote_msg = await ctx.send(embed=nova_embed("cONTINUE oR eND?", "rEACT wITH ✅ tO cONTINUE, ❌ tO eND tHE gAME!"))
+        await vote_msg.add_reaction("✅")
+        await vote_msg.add_reaction("❌")
+        await asyncio.sleep(20)  # 20 seconds to vote
+        vote_msg = await ctx.channel.fetch_message(vote_msg.id)
+        cont_votes = 0
+        end_votes = 0
+        for reaction in vote_msg.reactions:
+            if str(reaction.emoji) == "✅":
+                cont_votes = reaction.count - 1
+            elif str(reaction.emoji) == "❌":
+                end_votes = reaction.count - 1
+        if end_votes > cont_votes:
+            game_over = True
+            await ctx.send(embed=nova_embed("gAME eNDING", "mAJORITY vOTED tO eND tHE gAME!"))
+        else:
+         round_num += 1
+    # --- Final Voting ---
+    await ctx.send(embed=nova_embed("vOTE tHE iMPOSTER!", "rEACT wITH tHE eMOJI fOR wHO yOU tHINK iS tHE iMPOSTER!"))
+    emojis = [chr(0x1F1E6 + i) for i in range(len(players))]  # 🇦, 🇧, 🇨, ...
+    vote_embed = discord.Embed(title="vOTE tHE iMPOSTER!", description="\n".join([f"{emojis[i]} {players[i].mention}" for i in range(len(players))]), color=0xff69b4)
+    vote_embed.set_footer(text="nOVA")
+    vote_msg = await ctx.send(embed=vote_embed)
+    for e in emojis:
+        await vote_msg.add_reaction(e)
+    await asyncio.sleep(20)  # 20 seconds to vote
+    vote_msg = await ctx.channel.fetch_message(vote_msg.id)
+    votes = [0] * len(players)
+    for reaction in vote_msg.reactions:
+        if reaction.emoji in emojis:
+            idx = emojis.index(reaction.emoji)
+            votes[idx] = reaction.count - 1
+    max_votes = max(votes)
+    if votes.count(max_votes) > 1:
+        await ctx.send(embed=nova_embed("nO wINNER", "iT'S a tIE! nO oNE wINS!"))
+        return
+    voted_idx = votes.index(max_votes)
+    voted_player = players[voted_idx]
+    if voted_player == imposter:
+        # Crew wins
+        for p in players:
+            if p != imposter:
+                change_balance(p.id, 200)
+        await ctx.send(embed=nova_embed("cREW wINS!", f"tHE cREW fOUND tHE iMPOSTER!\n\n{imposter.mention} wAS tHE iMPOSTER!\n\n{', '.join([pl.mention for pl in players if pl != imposter])} gET 200 {CURRENCY_NAME} eACH!"))
+    else:
+        # Imposter wins
+        change_balance(imposter.id, 500)
+        await ctx.send(embed=nova_embed("iMPOSTER wINS!", f"{imposter.mention} sURVIVED! tHEY gET 500 {CURRENCY_NAME}!"))
+
+@bot.tree.command(name="imposter", description="Start an imposter game and DM secret words!")
+async def imposter_slash(interaction: discord.Interaction):
+    if interaction.guild is None or interaction.channel is None:
+        await interaction.response.send_message(embed=nova_embed("iMPOSTER", "tHIS cOMMAND mUST bE uSED iN a sERVER cHANNEL!"), ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    # Get all non-bot members who can see the channel
+    channel = interaction.channel
+    if not hasattr(channel, 'members'):
+        await interaction.followup.send(embed=nova_embed("iMPOSTER", "cOULD nOT gET cHANNEL mEMBERS!"), ephemeral=True)
+        return
+    members = [m for m in channel.members if not m.bot]
+    if len(members) < 3:
+        await interaction.followup.send(embed=nova_embed("iMPOSTER", "nEED aT lEAST 3 pEOPLE tO pLAY!"), ephemeral=True)
+        return
+    imposter = random.choice(members)
+    word_list = ["banana", "apple", "grape", "peach", "lemon", "carrot", "onion", "potato", "pizza", "burger"]
+    secret_word = random.choice(word_list)
+    imposter_word = random.choice([w for w in word_list if w != secret_word])
+    # Send game start message
+    msg = await channel.send(embed=nova_embed("iMPOSTER gAME", f"rEACT wITH 🕵️ tO tHIS mESSAGE tO jOIN!\n\nyOU hAVE 45 sECONDS..."))
+    await msg.add_reaction("🕵️")
+    failed = []
+    for m in members:
+        try:
+            if m == imposter:
+                await m.send(embed=nova_embed("iMPOSTER wORD", f"yOU aRE tHE iMPOSTER! yOUR wORD iS: **{imposter_word}**"))
+            else:
+                await m.send(embed=nova_embed("iMPOSTER wORD", f"yOUR wORD iS: **{secret_word}**"))
+        except Exception:
+            failed.append(m.display_name)
+    if failed:
+        await channel.send(embed=nova_embed("iMPOSTER", f"cOULD nOT dM: {', '.join(failed)}"))
+    await channel.send(embed=nova_embed("iMPOSTER", "aLL sECRET wORDS hAVE bEEN sENT!"))
+    await interaction.followup.send(embed=nova_embed("iMPOSTER", "gAME sTARTED! cHECK yOUR dMS!"), ephemeral=True)
+    
+
+@bot.command()
+async def warn(ctx, member: discord.Member = None, *, reason="No reason provided"):
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("wARN", "yOU dON'T hAVE pERMISSION!"))
+        return
+    if member is None:
+        await ctx.send("Usage: ?warn @user [reason] - Warns a member. Only mods/admins can use this.")
+        return
+    try:
+        # Log the warning
+        log_case(ctx.guild.id, "Warn", ctx.author, ctx.channel, datetime.now(datetime.timezone.utc))
+        # DM the user
+        try:
+            await member.send(embed=nova_embed("wARNED bY nOVA", f"yOU wERE wARNED iN {ctx.guild.name} bY {ctx.author.mention} fOR: {reason}"))
+        except Exception:
+            pass  # Ignore if DMs are closed
+        await ctx.send(embed=nova_embed("wARN", f"{member.mention} wAS wARNED fOR: {reason}"))
+    except Exception as e:
+        await ctx.send(embed=nova_embed("wARN", f"cOULD nOT wARN: {e}"))
+
+# Slash command version of warn
+@bot.tree.command(name="warn", description="Warn a member (mods only)")
+@app_commands.describe(member="The member to warn", reason="Reason for warning")
+async def warn_slash(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    ctx = await bot.get_context(interaction)
+    if not has_mod_or_admin(ctx):
+        await interaction.response.send_message(embed=nova_embed("wARN", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    try:
+        log_case(interaction.guild.id, "Warn", interaction.user, interaction.channel, datetime.now(datetime.timezone.utc))
+        try:
+            await member.send(embed=nova_embed("wARNED bY nOVA", f"yOU wERE wARNED iN {interaction.guild.name} bY {interaction.user.mention} fOR: {reason}"))
+        except Exception:
+            pass
+        await interaction.response.send_message(embed=nova_embed("wARN", f"{member.mention} wAS wARNED fOR: {reason}"))
+    except Exception as e:
+        await interaction.response.send_message(embed=nova_embed("wARN", f"cOULD nOT wARN: {e}"), ephemeral=True)
 
 bot.run(TOKEN)
