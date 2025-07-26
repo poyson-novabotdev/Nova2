@@ -335,6 +335,26 @@ def nova_embed(title, description=None, color=0xff69b4, footer="nOVA"):
     embed.set_footer(text=footer)
     return embed
 
+# Birthday format helper
+def format_birthday(date_str):
+    """Convert DD-MM format to readable format like 'June 9th'"""
+    try:
+        day, month = map(int, date_str.split("-"))
+        months = [
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ]
+        
+        # Add ordinal suffix to day
+        if 10 <= day % 100 <= 20:
+            suffix = "th"
+        else:
+            suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+        
+        return f"{months[month-1]} {day}{suffix}"
+    except:
+        return date_str  # Return original if parsing fails
+
 # AFK system persistence
 def load_afk():
     """Load AFK status from AFK_FILE into the global AFK_STATUS dict."""
@@ -517,7 +537,46 @@ async def on_raw_reaction_add(payload):
 
 @bot.event
 async def on_raw_reaction_remove(payload):
-    """Event: Called when a reaction is removed. Handles role removal."""
+    """Event: Called when a reaction is removed. Handles role removal and rsnipe storage."""
+    # Store the last removed reaction for rsnipe - Enhanced debugging
+    print(f"DEBUG: Reaction removed - Emoji: {payload.emoji}, User ID: {payload.user_id}, Guild ID: {payload.guild_id}")
+    
+    if payload.guild_id:
+        guild = bot.get_guild(payload.guild_id)
+        print(f"DEBUG: Guild found: {guild}")
+        if guild:
+            user = guild.get_member(payload.user_id)
+            print(f"DEBUG: User found: {user}, Is bot: {user.bot if user else 'None'}")
+            if user and not user.bot:
+                channel = guild.get_channel(payload.channel_id)
+                print(f"DEBUG: Channel found: {channel}")
+                if channel:
+                    try:
+                        message = await channel.fetch_message(payload.message_id)
+                        jump_url = message.jump_url
+                        print(f"DEBUG: Message fetched successfully, jump_url: {jump_url}")
+                    except Exception as e:
+                        jump_url = None
+                        print(f"DEBUG: Failed to fetch message: {e}")
+                    
+                    rsnipes[payload.channel_id] = {
+                        'emoji': str(payload.emoji),
+                        'user': str(user),
+                        'message_id': payload.message_id,
+                        'jump_url': jump_url,
+                        'time': datetime.now(datetime.timezone.utc)
+                    }
+                    print(f"DEBUG: RSnipe data stored for channel {payload.channel_id}: {rsnipes[payload.channel_id]}")
+                else:
+                    print(f"DEBUG: Channel not found with ID: {payload.channel_id}")
+            else:
+                print(f"DEBUG: User is bot or not found, skipping rsnipe storage")
+        else:
+            print(f"DEBUG: Guild not found with ID: {payload.guild_id}")
+    else:
+        print("DEBUG: No guild_id in payload, skipping rsnipe storage")
+    
+    # Handle role removal (existing logic)
     if payload.message_id != ROLE_MESSAGE_ID:
         return
     guild = bot.get_guild(payload.guild_id)
@@ -2077,7 +2136,8 @@ async def birthday(ctx, user: discord.Member = None):
     birthdays = load_birthdays()
     bday = birthdays.get(str(user.id))
     if bday:
-        await ctx.send(embed=nova_embed("🎂 bIRTHDAY", f"{user.display_name}'s birthday is {bday}!"))
+        formatted_bday = format_birthday(bday)
+        await ctx.send(embed=nova_embed("🎂 bIRTHDAY", f"{user.display_name}'s birthday is {formatted_bday}!"))
     else:
         await ctx.send(embed=nova_embed("🎂 bIRTHDAY", f"No birthday set for {user.display_name}."))
 
@@ -2090,8 +2150,12 @@ async def bday(ctx, user: discord.Member = None):
 
 
 @bot.command()
-async def setbday(ctx, date: str):
+async def setbday(ctx, date: str = None):
     """Set your birthday. Usage: ?setbday DD-MM"""
+    if date is None:
+        await ctx.send(embed=nova_embed("🎂 sET bIRTHDAY", "Usage: ?setbday DD-MM\n\nExample: ?setbday 15-04 for April 15th\n\nThis will display as: April 15th"))
+        return
+    
     # Basic validation
     try:
         day, month = map(int, date.split("-"))
@@ -2103,12 +2167,16 @@ async def setbday(ctx, date: str):
     birthdays = load_birthdays()
     birthdays[str(ctx.author.id)] = date
     save_birthdays(birthdays)
-    await ctx.send(embed=nova_embed("🎂 sET bIRTHDAY", f"Birthday set to {date}!"))
+    formatted_date = format_birthday(date)
+    await ctx.send(embed=nova_embed("🎂 sET bIRTHDAY", f"Birthday set to {formatted_date}!"))
 
 # Alias for setbday command
 @bot.command(name="setbirthday")
-async def setbirthday(ctx, date: str):
+async def setbirthday(ctx, date: str = None):
     """Set your birthday. Usage: ?setbirthday DD-MM (alias for ?setbday)"""
+    if date is None:
+        await ctx.send(embed=nova_embed("🎂 sET bIRTHDAY", "Usage: ?setbirthday DD-MM\n\nExample: ?setbirthday 15-04 for April 15th\n\nThis will display as: April 15th"))
+        return
     await setbday(ctx, date)
 
 
@@ -2124,7 +2192,8 @@ async def birthdays(ctx):
     for user_id, date in birthdays.items():
         member = ctx.guild.get_member(int(user_id))
         if member:
-            lines.append(f"{member.display_name}: {date}")
+            formatted_date = format_birthday(date)
+            lines.append(f"{member.display_name}: {formatted_date}")
     if lines:
         await ctx.send(embed=nova_embed("🎂 sERVER bIRTHDAYS", "\n".join(lines)))
     else:
@@ -2138,7 +2207,8 @@ async def birthday_slash(interaction: discord.Interaction, user: discord.Member 
     birthdays = load_birthdays()
     bday = birthdays.get(str(user.id))
     if bday:
-        await interaction.response.send_message(embed=nova_embed("🎂 bIRTHDAY", f"{user.display_name}'s birthday is {bday}!"))
+        formatted_bday = format_birthday(bday)
+        await interaction.response.send_message(embed=nova_embed("🎂 bIRTHDAY", f"{user.display_name}'s birthday is {formatted_bday}!"))
     else:
         await interaction.response.send_message(embed=nova_embed("🎂 bIRTHDAY", f"No birthday set for {user.display_name}."))
 
@@ -3071,20 +3141,41 @@ rsnipes = {}  # channel_id: {'emoji': str, 'user': str, 'message_id': int, 'jump
 async def on_message_delete(message):
     if message.author.bot:
         return
+    
+    # Store for snipe command
     snipes[message.channel.id] = {
         'content': message.content,
         'author': str(message.author),
         'time': message.created_at
     }
-    # Chat logs for mods
+    
+    # Chat logs for mods - Enhanced debugging
+    print(f"DEBUG: Message deleted by {message.author} in {message.channel}")
+    print(f"DEBUG: CHAT_LOGS_CHANNEL_ID = {CHAT_LOGS_CHANNEL_ID}")
+    
     if CHAT_LOGS_CHANNEL_ID:
         guild = message.guild
+        print(f"DEBUG: Guild = {guild}")
         if guild:
             log_channel = guild.get_channel(CHAT_LOGS_CHANNEL_ID)
+            print(f"DEBUG: Log channel = {log_channel}")
             if log_channel:
-                embed = nova_embed("🗑️ Message Deleted", f"**Author:** {message.author}\n**Channel:** {message.channel.mention}\n**Content:** {message.content}")
-                embed.timestamp = datetime.now(datetime.timezone.utc)
-                await log_channel.send(embed=embed)
+                try:
+                    content = message.content if message.content else "*[No text content]*"
+                    embed = nova_embed("🗑️ mESSAGE dELETED", f"**Author:** {message.author}\n**Channel:** {message.channel.mention}\n**Content:** {content}")
+                    embed.timestamp = datetime.now(datetime.timezone.utc)
+                    await log_channel.send(embed=embed)
+                    print(f"DEBUG: Chat log sent successfully to {log_channel.name}")
+                except Exception as e:
+                    print(f"ERROR: Failed to send chat log: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print(f"ERROR: Chat logs channel not found with ID: {CHAT_LOGS_CHANNEL_ID}")
+        else:
+            print("ERROR: Guild not found for message deletion")
+    else:
+        print("DEBUG: CHAT_LOGS_CHANNEL_ID is None - chat logs disabled")
 
 @bot.event
 async def on_message_edit(before, after):
@@ -3134,19 +3225,27 @@ async def on_raw_reaction_remove(payload):
 
 @bot.command()
 async def rsnipe(ctx):
+    print(f"DEBUG: RSnipe command called by {ctx.author} in {ctx.channel}")
     if not has_mod_or_admin(ctx):
         await ctx.send(embed=nova_embed("rSNIPE", "yOU dON'T hAVE pERMISSION!"))
         return
+    
+    print(f"DEBUG: Checking rsnipes for channel {ctx.channel.id}")
+    print(f"DEBUG: Available rsnipes: {list(rsnipes.keys())}")
     data = rsnipes.get(ctx.channel.id)
+    print(f"DEBUG: RSnipe data found: {data}")
+    
     if not data:
         await ctx.send(embed=nova_embed("rSNIPE", "nOTHING tO rSNIPE!"))
         return
+    
     desc = f"{data['user']} rEMOVED rEACTION {data['emoji']}"
     if data['jump_url']:
         desc += f"\n[Jump to message]({data['jump_url']})"
     embed = nova_embed("rSNIPE", desc)
     embed.set_footer(text=f"{data['time'].strftime('%Y-%m-%d %H:%M:%S')}")
     await ctx.send(embed=embed)
+    print(f"DEBUG: RSnipe embed sent successfully")
 
 @bot.tree.command(name="rsnipe", description="Show the last removed reaction in this channel")
 async def rsnipe_slash(interaction: discord.Interaction):
