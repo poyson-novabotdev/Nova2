@@ -3208,7 +3208,7 @@ async def on_message_delete(message):
             if log_channel:
                 try:
                     content = message.content if message.content else "*[No text content]*"
-                    embed = nova_embed("🗑️ mESSAGE dELETED", f"**Author:** {message.author}\n**Channel:** {message.channel.mention}\n**Message ID:** {message.id}\n**Content:** {content}")
+                    embed = nova_embed("🗑️ mESSAGE dELETED", f"**Author:** {message.author}\n**Channel:** {message.channel.mention}\n**Content:** {content}")
                     embed.timestamp = datetime.now(dt_timezone.utc)
                     await log_channel.send(embed=embed)
                     print(f"DEBUG: Chat log sent successfully to {log_channel.name}")
@@ -3245,7 +3245,7 @@ async def on_message_edit(before, after):
                     
                     embed = nova_embed(
                         "✏️ mESSAGE eDITED", 
-                        f"**Author:** {before.author}\n**Channel:** {before.channel.mention}\n**Message ID:** {before.id}"
+                        f"**Author:** {before.author}\n**Channel:** {before.channel.mention}"
                     )
                     embed.add_field(name="Before", value=f"```{before_content[:1000]}```", inline=False)
                     embed.add_field(name="After", value=f"```{after_content[:1000]}```", inline=False)
@@ -3774,7 +3774,7 @@ class TicketModal(discord.ui.Modal, title='Create Support Ticket'):
             embed.add_field(name="Status", value="🟢 Open", inline=True)
             embed.add_field(name="Priority", value=priority_display, inline=True)
             
-            # Create close butto
+            # Create close button
             view = TicketCloseView()
             
             await ticket_channel.send(embed=embed, view=view)
