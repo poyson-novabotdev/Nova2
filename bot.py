@@ -953,8 +953,8 @@ async def spotify(ctx, member: discord.Member = None):
             embed.set_thumbnail(url=activity.album_cover_url)
             embed.add_field(name="Track URL", value=f"[Open in Spotify](https://open.spotify.com/track/{activity.track_id})")
             msg = await ctx.send(embed=embed)
-            await msg.add_reaction(":bop:")
-            await msg.add_reaction(":flop:")
+            await msg.add_reaction("<:bop:1399030917976031293>")
+            await msg.add_reaction("<:flop:1398830540832116737>")
             return
     await ctx.send(f"{member.display_name} is not listening to Spotify right now.")
 
@@ -1138,8 +1138,8 @@ async def spotify_slash(interaction: discord.Interaction, member: discord.Member
             embed.set_thumbnail(url=activity.album_cover_url)
             embed.add_field(name="Track URL", value=f"[Open in Spotify](https://open.spotify.com/track/{activity.track_id})")
             msg = await interaction.channel.send(embed=embed)
-            await msg.add_reaction(":bop:")
-            await msg.add_reaction(":flop:")
+            await msg.add_reaction("<:bop:1399030917976031293>")
+            await msg.add_reaction("<:flop:1398830540832116737>")
             return
     await interaction.response.send_message(f"{member.display_name} is not listening to Spotify right now.")
 
@@ -4000,5 +4000,36 @@ async def setticketlogs_slash(interaction: discord.Interaction, channel: discord
             ephemeral=True
         )
     save_config()
+
+# Temporary debug command to get emoji IDs
+@bot.command()
+async def getemojis(ctx):
+    """Debug command to get all custom emoji IDs"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("gET eMOJIS", "Only mods/admins can use this command!"))
+        return
+    
+    guild = ctx.guild
+    if not guild:
+        await ctx.send("This command must be used in a server.")
+        return
+    
+    emoji_list = []
+    for emoji in guild.emojis:
+        emoji_list.append(f"{emoji.name}: `<:{emoji.name}:{emoji.id}>`")
+    
+    if not emoji_list:
+        await ctx.send(embed=nova_embed("gET eMOJIS", "No custom emojis found in this server."))
+        return
+    
+    # Split into chunks if too many emojis
+    chunk_size = 10
+    for i in range(0, len(emoji_list), chunk_size):
+        chunk = emoji_list[i:i+chunk_size]
+        embed = nova_embed(
+            f"cUSTOM eMOJIS ({i+1}-{min(i+chunk_size, len(emoji_list))} of {len(emoji_list)})",
+            "\n".join(chunk)
+        )
+        await ctx.send(embed=embed)
 
 bot.run(TOKEN)
