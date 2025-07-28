@@ -510,6 +510,34 @@ async def on_message(message):
                 time_str = f"{hours}h {mins}m" if hours else f"{mins}m"
                 await message.channel.send(embed=nova_embed("aFK", f"{member.display_name} iS aFK: {afk['reason']} ({time_str})"))
     add_xp(message.author.id, random.randint(5, 15))
+    
+    # Check for blacklisted words and auto-delete
+    message_lower = message.content.lower()
+    for word in BLACKLIST_WORDS:
+        if word in message_lower:
+            try:
+                await message.delete()
+                # Send a warning message that deletes after 5 seconds
+                warning = await message.channel.send(
+                    embed=nova_embed(
+                        "⚠️ mESSAGE dELETED",
+                        f"{message.author.mention}, yOUR mESSAGE cONTAINED a bLACKLISTED wORD!"
+                    ),
+                    delete_after=5
+                )
+                return  # Don't process commands if message was deleted
+            except discord.errors.NotFound:
+                pass  # Message was already deleted
+            except discord.errors.Forbidden:
+                pass  # Bot doesn't have permission to delete
+    
+    # React with cute Nova emoji when someone mentions "Nova"
+    if "nova" in message_lower:
+        try:
+            await message.add_reaction("<:cute_nova:1398830405691637800>")
+        except discord.errors.HTTPException:
+            pass  # Emoji not found or other error
+    
     # Check if message starts with "nova:" to make Nova say the text
     if message.content.lower().startswith("nova:"):
         # Only allow the owner to use this feature
@@ -953,8 +981,8 @@ async def spotify(ctx, member: discord.Member = None):
             embed.set_thumbnail(url=activity.album_cover_url)
             embed.add_field(name="Track URL", value=f"[Open in Spotify](https://open.spotify.com/track/{activity.track_id})")
             msg = await ctx.send(embed=embed)
-            await msg.add_reaction(":bop:")
-            await msg.add_reaction(":flop:")
+            await msg.add_reaction("<:bop:1399081053800501358>")
+            await msg.add_reaction("<:flop:1398830540832116737>")
             return
     await ctx.send(f"{member.display_name} is not listening to Spotify right now.")
 
@@ -1138,8 +1166,8 @@ async def spotify_slash(interaction: discord.Interaction, member: discord.Member
             embed.set_thumbnail(url=activity.album_cover_url)
             embed.add_field(name="Track URL", value=f"[Open in Spotify](https://open.spotify.com/track/{activity.track_id})")
             msg = await interaction.channel.send(embed=embed)
-            await msg.add_reaction(":bop:")
-            await msg.add_reaction(":flop:")
+            await msg.add_reaction("<:bop:1399081053800501358>")
+            await msg.add_reaction("<:flop:1398830540832116737>")
             return
     await interaction.response.send_message(f"{member.display_name} is not listening to Spotify right now.")
 
@@ -1887,16 +1915,48 @@ async def unmute_slash(interaction: discord.Interaction, member: discord.Member)
         await interaction.response.send_message(embed=nova_embed("uNMUTE", "cOULD nOT uNMUTE tHAT uSER!"), ephemeral=True)
 
 @bot.command()
-async def case(ctx):
-    cases = mod_cases.get(ctx.guild.id, [])
-    if not cases:
-        await ctx.send(embed=nova_embed("cASES", "nO mODERATION cASES fOUND!"))
+async def case(ctx, member: discord.Member = None):
+    """Show a member's past infractions"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("cASE", "Only mods/admins can view cases!"))
         return
-    desc = ""
-    for i, c in enumerate(cases, 1):
-        desc += f"**{i}.** `{c['action']}` by {c['user']} in {c['channel']} • {c['time'].strftime('%Y-%m-%d %H:%M:%S')}\n"
-    await ctx.send(embed=nova_embed("cASES", desc))
-    await ctx.send("Usage: ?case - Shows the last 20 moderation actions. Only mods/admins can use this.")
+    
+    if member is None:
+        await ctx.send(embed=nova_embed("cASE", "pLEASE sPECIFY a mEMBER!"))
+        return
+    
+    user_id = str(member.id)
+    
+    if user_id not in INFRACTIONS or not INFRACTIONS[user_id]:
+        embed = nova_embed(
+            f"📋 cASE fILE: {member.display_name}",
+            "nO iNFRACTIONS oN rECORD! 🎉"
+        )
+        embed.set_thumbnail(url=member.avatar.url if member.avatar else None)
+        await ctx.send(embed=embed)
+        return
+    
+    infractions = INFRACTIONS[user_id]
+    infraction_list = []
+    
+    for i, infraction in enumerate(infractions[-10:], 1):  # Show last 10
+        date_str = infraction["date"].strftime("%Y-%m-%d")
+        infraction_list.append(
+            f"**{i}.** {infraction['type'].upper()} - {date_str}\n"
+            f"   rEASON: {infraction['reason']}\n"
+            f"   mOD: {infraction['moderator']}"
+        )
+    
+    embed = nova_embed(
+        f"📋 cASE fILE: {member.display_name}",
+        f"tOTAL iNFRACTIONS: {len(infractions)}\n\n" + "\n\n".join(infraction_list)
+    )
+    embed.set_thumbnail(url=member.avatar.url if member.avatar else None)
+    
+    if len(infractions) > 10:
+        embed.set_footer(text=f"sHOWING lAST 10 oF {len(infractions)} iNFRACTIONS")
+    
+    await ctx.send(embed=embed)
 
 @bot.tree.command(name="case", description="Show all moderation actions in this server (up to 20)")
 async def case_slash(interaction: discord.Interaction):
@@ -3208,7 +3268,7 @@ async def on_message_delete(message):
             if log_channel:
                 try:
                     content = message.content if message.content else "*[No text content]*"
-                    embed = nova_embed("🗑️ mESSAGE dELETED", f"**Author:** {message.author}\n**Channel:** {message.channel.mention}\n**Content:** {content}")
+                    embed = nova_embed("🗑️ mESSAGE dELETED", f"**Author:** {message.author}\n**Channel:** {message.channel.mention}\n**Message ID:** {message.id}\n**Content:** {content}")
                     embed.timestamp = datetime.now(dt_timezone.utc)
                     await log_channel.send(embed=embed)
                     print(f"DEBUG: Chat log sent successfully to {log_channel.name}")
@@ -3245,7 +3305,7 @@ async def on_message_edit(before, after):
                     
                     embed = nova_embed(
                         "✏️ mESSAGE eDITED", 
-                        f"**Author:** {before.author}\n**Channel:** {before.channel.mention}"
+                        f"**Author:** {before.author}\n**Channel:** {before.channel.mention}\n**Message ID:** {before.id}"
                     )
                     embed.add_field(name="Before", value=f"```{before_content[:1000]}```", inline=False)
                     embed.add_field(name="After", value=f"```{after_content[:1000]}```", inline=False)
@@ -3475,10 +3535,9 @@ async def on_member_join(member):
             member_count = member.guild.member_count
             member_number = member_count  # The new member is the latest count
             
-            # Create welcome message with rules, member count, and member number
+            # Create welcome message with specific rules channel
             description = f"wELCOME tO tHE sERVER, {member.mention}! 💖\n\n"
-            description += f"📋 pLEASE rEAD <#rules> tO gET sTARTED!\n"
-            description += f"👥 wE nOW hAVE {member_count} mEMBERS!\n"
+            description += f"📋 pLEASE rEAD <#1390109532851535962> tO gET sTARTED!\n"
             description += f"🎉 yOU aRE oUR {member_number}th mEMBER!\n\n"
             description += "mAKE yOURSELF aT hOME!"
             
@@ -3774,7 +3833,7 @@ class TicketModal(discord.ui.Modal, title='Create Support Ticket'):
             embed.add_field(name="Status", value="🟢 Open", inline=True)
             embed.add_field(name="Priority", value=priority_display, inline=True)
             
-            # Create close button
+            # Create close butto
             view = TicketCloseView()
             
             await ticket_channel.send(embed=embed, view=view)
@@ -4000,5 +4059,564 @@ async def setticketlogs_slash(interaction: discord.Interaction, channel: discord
             ephemeral=True
         )
     save_config()
+
+# Temporary debug command to get emoji IDs
+@bot.command()
+async def getemojis(ctx):
+    """Debug command to get all custom emoji IDs"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("gET eMOJIS", "Only mods/admins can use this command!"))
+        return
+    
+    guild = ctx.guild
+    if not guild:
+        await ctx.send("This command must be used in a server.")
+        return
+    
+    emoji_list = []
+    for emoji in guild.emojis:
+        emoji_list.append(f"{emoji.name}: `<:{emoji.name}:{emoji.id}>`")
+    
+    if not emoji_list:
+        await ctx.send(embed=nova_embed("gET eMOJIS", "No custom emojis found in this server."))
+        return
+    
+    # Split into chunks if too many emojis
+    chunk_size = 10
+    for i in range(0, len(emoji_list), chunk_size):
+        chunk = emoji_list[i:i+chunk_size]
+        embed = nova_embed(
+            f"cUSTOM eMOJIS ({i+1}-{min(i+chunk_size, len(emoji_list))} of {len(emoji_list)})",
+            "\n".join(chunk)
+        )
+        await ctx.send(embed=embed)
+
+# =========================
+# New Feature Commands
+# =========================
+
+# Global variables for new features
+BLACKLIST_WORDS = set()
+PET_DATA = {}  # user_id: {"name": str, "type": str, "level": int, "xp": int, "hunger": int, "cleanliness": int, "happiness": int}
+FOCUS_SESSIONS = {}  # user_id: {"start_time": datetime, "duration": int, "breaks": int}
+LOTTERY_PARTICIPANTS = set()  # user_ids
+INFRACTIONS = {}  # user_id: [{"type": str, "reason": str, "date": datetime, "moderator": str}]
+
+# Load data files for new features
+def load_blacklist():
+    global BLACKLIST_WORDS
+    try:
+        with open("blacklist.json", "r") as f:
+            BLACKLIST_WORDS = set(json.load(f))
+    except FileNotFoundError:
+        BLACKLIST_WORDS = set()
+
+def save_blacklist():
+    with open("blacklist.json", "w") as f:
+        json.dump(list(BLACKLIST_WORDS), f)
+
+def load_pets():
+    global PET_DATA
+    try:
+        with open("pets.json", "r") as f:
+            PET_DATA = json.load(f)
+    except FileNotFoundError:
+        PET_DATA = {}
+
+def save_pets():
+    with open("pets.json", "w") as f:
+        json.dump(PET_DATA, f)
+
+def load_infractions():
+    global INFRACTIONS
+    try:
+        with open("infractions.json", "r") as f:
+            data = json.load(f)
+            # Convert date strings back to datetime objects
+            for user_id, infractions in data.items():
+                for infraction in infractions:
+                    infraction["date"] = datetime.fromisoformat(infraction["date"])
+            INFRACTIONS = data
+    except FileNotFoundError:
+        INFRACTIONS = {}
+
+def save_infractions():
+    with open("infractions.json", "w") as f:
+        # Convert datetime objects to strings for JSON serialization
+        data = {}
+        for user_id, infractions in INFRACTIONS.items():
+            data[user_id] = []
+            for infraction in infractions:
+                infraction_copy = infraction.copy()
+                infraction_copy["date"] = infraction["date"].isoformat()
+                data[user_id].append(infraction_copy)
+        json.dump(data, f)
+
+def add_infraction(user_id, infraction_type, reason, moderator):
+    user_id = str(user_id)
+    if user_id not in INFRACTIONS:
+        INFRACTIONS[user_id] = []
+    INFRACTIONS[user_id].append({
+        "type": infraction_type,
+        "reason": reason,
+        "date": datetime.now(),
+        "moderator": moderator
+    })
+    save_infractions()
+
+# Load all new feature data on startup
+load_blacklist()
+load_pets()
+load_infractions()
+
+# Drama command
+@bot.command()
+async def drama(ctx):
+    """Nova spills random fake tea between server members"""
+    members = [m for m in ctx.guild.members if not m.bot and m != ctx.author]
+    if len(members) < 2:
+        await ctx.send(embed=nova_embed("dRAMA", "nOT eNOUGH mEMBERS fOR dRAMA!"))
+        return
+    
+    member1, member2 = random.sample(members, 2)
+    
+    drama_scenarios = [
+        f"i hEARD {member1.mention} sAID {member2.mention}'S fAVORITE pIZZA tOPPING iS pINEAPPLE...",
+        f"{member1.mention} aPPARENTLY tHINKS {member2.mention} pUTS mILK bEFORE cEREAL... sCANDALOUS!",
+        f"rUMOR hAS iT {member2.mention} tOLD eVERYONE tHAT {member1.mention} sTILL sLEEPS wITH a tEDDY bEAR!",
+        f"i cAN'T bELIEVE {member1.mention} sAID {member2.mention} uNIRONICALLY lIKES nICKELBACK!",
+        f"{member2.mention} aPPARENTLY cAUGHT {member1.mention} tALKING tO tHEIR pLANTS... aGAIN!",
+        f"wORD oN tHE sTREET iS {member1.mention} tHINKS {member2.mention} aCTUALLY eNJOYS mONDAYS...",
+        f"{member1.mention} rEPORTEDLY sAW {member2.mention} eATING pIZZA wITH a fORK aND kNIFE...",
+        f"i hEARD {member2.mention} tOLD eVERYONE tHAT {member1.mention} likes cougars..."
+    ]
+    
+    drama_text = random.choice(drama_scenarios)
+    embed = nova_embed("☕ tEA tIME ☕", drama_text)
+    await ctx.send(embed=embed)
+
+# Server info command
+@bot.command()
+async def serverinfo(ctx):
+    """Shows server information"""
+    guild = ctx.guild
+    
+    # Count different member types
+    total_members = guild.member_count
+    humans = len([m for m in guild.members if not m.bot])
+    bots = len([m for m in guild.members if m.bot])
+    online = len([m for m in guild.members if m.status != discord.Status.offline])
+    
+    # Get creation date
+    created = guild.created_at.strftime("%B %d, %Y")
+    
+    # Get owner
+    owner = guild.owner
+    
+    embed = nova_embed(
+        f"📊 {guild.name} iNFO",
+        f"**mEMBERS:** {total_members} ({humans} hUMANS, {bots} bOTS)\n"
+        f"**oNLINE:** {online}\n"
+        f"**cREATED:** {created}\n"
+        f"**oWNER:** {owner.mention if owner else 'uNKNOWN'}\n"
+        f"**cHANNELS:** {len(guild.channels)}\n"
+        f"**rOLES:** {len(guild.roles)}\n"
+        f"**bOOST lEVEL:** {guild.premium_tier}\n"
+        f"**bOOSTS:** {guild.premium_subscription_count}"
+    )
+    
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    
+    await ctx.send(embed=embed)
+
+# Blacklist command
+@bot.command()
+async def blacklist(ctx, *, word=None):
+    """Add or remove words from the blacklist (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("bLACKLIST", "Only mods/admins can manage the blacklist!"))
+        return
+    
+    if word is None:
+        if not BLACKLIST_WORDS:
+            await ctx.send(embed=nova_embed("bLACKLIST", "nO wORDS aRE cURRENTLY bLACKLISTED."))
+        else:
+            word_list = "\n".join([f"• {w}" for w in sorted(BLACKLIST_WORDS)])
+            embed = nova_embed("bLACKLIST", f"cURRENT bLACKLISTED wORDS:\n{word_list}")
+            await ctx.send(embed=embed)
+        return
+    
+    word = word.lower()
+    
+    if word in BLACKLIST_WORDS:
+        BLACKLIST_WORDS.remove(word)
+        save_blacklist()
+        await ctx.send(embed=nova_embed("bLACKLIST", f"rEMOVED '{word}' fROM bLACKLIST."))
+    else:
+        BLACKLIST_WORDS.add(word)
+        save_blacklist()
+        await ctx.send(embed=nova_embed("bLACKLIST", f"aDDED '{word}' tO bLACKLIST."))
+
+# Focus timer command
+@bot.command()
+async def focus(ctx, duration: int = 25):
+    """Start a Pomodoro-style focus timer"""
+    if duration < 1 or duration > 120:
+        await ctx.send(embed=nova_embed("fOCUS", "dURATION mUST bE bETWEEN 1-120 mINUTES!"))
+        return
+    
+    user_id = ctx.author.id
+    
+    if user_id in FOCUS_SESSIONS:
+        await ctx.send(embed=nova_embed("fOCUS", "yOU aLREADY hAVE aN aCTIVE fOCUS sESSION!"))
+        return
+    
+    FOCUS_SESSIONS[user_id] = {
+        "start_time": datetime.now(),
+        "duration": duration,
+        "breaks": 0
+    }
+    
+    embed = nova_embed(
+        "🎯 fOCUS sESSION sTARTED",
+        f"fOCUSING fOR {duration} mINUTES!\n"
+        f"i'LL pING yOU wHEN iT'S tIME fOR a bREAK!"
+    )
+    await ctx.send(embed=embed)
+    
+    # Wait for the duration and then notify
+    await asyncio.sleep(duration * 60)
+    
+    if user_id in FOCUS_SESSIONS:
+        FOCUS_SESSIONS[user_id]["breaks"] += 1
+        breaks = FOCUS_SESSIONS[user_id]["breaks"]
+        
+        break_duration = 15 if breaks % 4 != 0 else 30  # Long break every 4 sessions
+        
+        embed = nova_embed(
+            "⏰ fOCUS sESSION cOMPLETE!",
+            f"gREAT jOB! tAKE a {break_duration}-mINUTE bREAK! 🎉\n"
+            f"sESSIONS cOMPLETED: {breaks}"
+        )
+        await ctx.send(f"{ctx.author.mention}", embed=embed)
+        
+        # Remove session after break
+        await asyncio.sleep(break_duration * 60)
+        if user_id in FOCUS_SESSIONS:
+            del FOCUS_SESSIONS[user_id]
+
+# Lottery command (owner only)
+@bot.command()
+async def lottery(ctx, action=None, price: int = None):
+    """Manage the weekly server lottery (owner only)"""
+    if ctx.author.id != OWNER_ID:
+        await ctx.send(embed=nova_embed("🎰 lOTTERY", "Only the owner can manage the lottery!"))
+        return
+    
+    if action is None:
+        # Show current lottery status
+        embed = nova_embed(
+            "🎰 lOTTERY sTATUS",
+            f"pARTICIPANTS: {len(LOTTERY_PARTICIPANTS)}\n"
+            f"cURRENT eNTRY cOST: {config.get('lottery_price', 100)} {CURRENCY_NAME}\n\n"
+            f"cOMMANDS:\n"
+            f"`?lottery start [price]` - Start new lottery with optional price\n"
+            f"`?lottery draw` - Draw winner and end current lottery\n"
+            f"`?lottery reset` - Reset current lottery\n"
+            f"`?lottery price [amount]` - Set entry price"
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    if action.lower() == "start":
+        if price is not None:
+            config['lottery_price'] = price
+            save_config()
+        
+        LOTTERY_PARTICIPANTS.clear()
+        entry_cost = config.get('lottery_price', 100)
+        
+        embed = nova_embed(
+            "🎰 nEW lOTTERY sTARTED!",
+            f"eNTRY cOST: {entry_cost} {CURRENCY_NAME}\n"
+            f"uSE `?joinlottery` tO pARTICIPATE!"
+        )
+        await ctx.send(embed=embed)
+    
+    elif action.lower() == "draw":
+        if not LOTTERY_PARTICIPANTS:
+            await ctx.send(embed=nova_embed("🎰 lOTTERY", "nO pARTICIPANTS iN cURRENT lOTTERY!"))
+            return
+        
+        winner_id = random.choice(list(LOTTERY_PARTICIPANTS))
+        winner = ctx.guild.get_member(winner_id)
+        entry_cost = config.get('lottery_price', 100)
+        prize = len(LOTTERY_PARTICIPANTS) * entry_cost
+        
+        change_balance(winner_id, prize)
+        
+        embed = nova_embed(
+            "🎉 lOTTERY wINNER!",
+            f"cONGRATULATIONS {winner.mention}!\n"
+            f"yOU wON {prize} {CURRENCY_NAME}!\n\n"
+            f"pARTICIPANTS: {len(LOTTERY_PARTICIPANTS)}"
+        )
+        await ctx.send(embed=embed)
+        
+        LOTTERY_PARTICIPANTS.clear()
+    
+    elif action.lower() == "reset":
+        LOTTERY_PARTICIPANTS.clear()
+        await ctx.send(embed=nova_embed("🎰 lOTTERY", "lOTTERY rESET!"))
+    
+    elif action.lower() == "price":
+        if price is None:
+            await ctx.send(embed=nova_embed("🎰 lOTTERY", "pLEASE sPECIFY a pRICE!"))
+            return
+        
+        config['lottery_price'] = price
+        save_config()
+        await ctx.send(embed=nova_embed("🎰 lOTTERY", f"eNTRY pRICE sET tO {price} {CURRENCY_NAME}!"))
+    
+    else:
+        await ctx.send(embed=nova_embed("🎰 lOTTERY", "iNVALID aCTION! uSE: start, draw, reset, or price"))
+
+# Join lottery command (for regular users)
+@bot.command()
+async def joinlottery(ctx):
+    """Join the current lottery"""
+    user_id = ctx.author.id
+    
+    if user_id in LOTTERY_PARTICIPANTS:
+        await ctx.send(embed=nova_embed("🎰 lOTTERY", "yOU'RE aLREADY iN tHIS lOTTERY!"))
+        return
+    
+    entry_cost = config.get('lottery_price', 100)
+    
+    # Check if user has enough balance
+    if get_balance(user_id) < entry_cost:
+        await ctx.send(embed=nova_embed("🎰 lOTTERY", f"yOU nEED {entry_cost} {CURRENCY_NAME} tO jOIN tHE lOTTERY!"))
+        return
+    
+    change_balance(user_id, -entry_cost)
+    LOTTERY_PARTICIPANTS.add(user_id)
+    
+    embed = nova_embed(
+        "🎰 lOTTERY eNTRY",
+        f"yOU'VE jOINED tHIS wEEK'S lOTTERY!\n"
+        f"pARTICIPANTS: {len(LOTTERY_PARTICIPANTS)}\n"
+        f"pRIZE pOOL: {len(LOTTERY_PARTICIPANTS) * entry_cost} {CURRENCY_NAME}"
+    )
+    await ctx.send(embed=embed)
+
+# Pet adoption system
+class PetView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+    
+    @discord.ui.button(label='fEED', style=discord.ButtonStyle.primary, emoji='🍖')
+    async def feed_pet(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("tHIS iSN'T yOUR pET!", ephemeral=True)
+            return
+        
+        user_id = str(self.user_id)
+        if user_id not in PET_DATA:
+            await interaction.response.send_message("yOU dON'T hAVE a pET!", ephemeral=True)
+            return
+        
+        pet = PET_DATA[user_id]
+        if pet["hunger"] >= 100:
+            await interaction.response.send_message(f"{pet['name']} iS aLREADY fULL!", ephemeral=True)
+            return
+        
+        pet["hunger"] = min(100, pet["hunger"] + 25)
+        pet["happiness"] = min(100, pet["happiness"] + 10)
+        pet["xp"] += 5
+        
+        # Check for level up
+        new_level = pet["xp"] // 100 + 1
+        level_up = new_level > pet["level"]
+        pet["level"] = new_level
+        
+        save_pets()
+        
+        message = f"yOU fED {pet['name']}! 🍖\nhUNGER: {pet['hunger']}/100"
+        if level_up:
+            message += f"\n🎉 {pet['name']} lEVELED uP tO lEVEL {pet['level']}!"
+        
+        await interaction.response.send_message(message, ephemeral=True)
+    
+    @discord.ui.button(label='cLEAN', style=discord.ButtonStyle.secondary, emoji='🧽')
+    async def clean_pet(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("tHIS iSN'T yOUR pET!", ephemeral=True)
+            return
+        
+        user_id = str(self.user_id)
+        if user_id not in PET_DATA:
+            await interaction.response.send_message("yOU dON'T hAVE a pET!", ephemeral=True)
+            return
+        
+        pet = PET_DATA[user_id]
+        if pet["cleanliness"] >= 100:
+            await interaction.response.send_message(f"{pet['name']} iS aLREADY cLEAN!", ephemeral=True)
+            return
+        
+        pet["cleanliness"] = min(100, pet["cleanliness"] + 30)
+        pet["happiness"] = min(100, pet["happiness"] + 15)
+        pet["xp"] += 8
+        
+        # Check for level up
+        new_level = pet["xp"] // 100 + 1
+        level_up = new_level > pet["level"]
+        pet["level"] = new_level
+        
+        save_pets()
+        
+        message = f"yOU cLEANED {pet['name']}! 🧽\ncLEANLINESS: {pet['cleanliness']}/100"
+        if level_up:
+            message += f"\n🎉 {pet['name']} lEVELED uP tO lEVEL {pet['level']}!"
+        
+        await interaction.response.send_message(message, ephemeral=True)
+    
+    @discord.ui.button(label='pET', style=discord.ButtonStyle.success, emoji='❤️')
+    async def pet_pet(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("tHIS iSN'T yOUR pET!", ephemeral=True)
+            return
+        
+        user_id = str(self.user_id)
+        if user_id not in PET_DATA:
+            await interaction.response.send_message("yOU dON'T hAVE a pET!", ephemeral=True)
+            return
+        
+        pet = PET_DATA[user_id]
+        pet["happiness"] = min(100, pet["happiness"] + 20)
+        pet["xp"] += 3
+        
+        # Check for level up
+        new_level = pet["xp"] // 100 + 1
+        level_up = new_level > pet["level"]
+        pet["level"] = new_level
+        
+        save_pets()
+        
+        responses = [
+            f"{pet['name']} pURRS hAPPILY!",
+            f"{pet['name']} wAGS tHEIR tAIL!",
+            f"{pet['name']} nUZZLES yOU!",
+            f"{pet['name']} lOOKS vERY hAPPY!"
+        ]
+        
+        message = random.choice(responses) + f"\nhAPPINESS: {pet['happiness']}/100"
+        if level_up:
+            message += f"\n🎉 {pet['name']} lEVELED uP tO lEVEL {pet['level']}!"
+        
+        await interaction.response.send_message(message, ephemeral=True)
+
+@bot.command()
+async def adoptpet(ctx):
+    """Adopt a virtual pet"""
+    user_id = str(ctx.author.id)
+    
+    if user_id in PET_DATA:
+        await ctx.send(embed=nova_embed("aDOPT pET", f"yOU aLREADY hAVE a pET nAMED {PET_DATA[user_id]['name']}!"))
+        return
+    
+    animals = ["Cat", "Dog", "Red Panda", "Raven", "Octopus", "Goldfish", "Tortoise", "Owl", "Lizard", "Bat", "Dove"]
+    animal_emojis = {"Cat": "🐱", "Dog": "🐶", "Red Panda": "🐼", "Raven": "🐦‍⬛", "Octopus": "🐙", 
+                    "Goldfish": "🐠", "Tortoise": "🐢", "Owl": "🦉", "Lizard": "🦎", "Bat": "🦇", "Dove": "🕊️"}
+    
+    animal_list = "\n".join([f"{animal_emojis[animal]} {animal}" for animal in animals])
+    
+    embed = nova_embed(
+        "🏠 aDOPT a pET",
+        f"cHOOSE yOUR pET:\n{animal_list}\n\ntYPE tHE aNIMAL nAME tO aDOPT!"
+    )
+    await ctx.send(embed=embed)
+    
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel and m.content.title() in animals
+    
+    try:
+        msg = await bot.wait_for('message', check=check, timeout=30.0)
+        chosen_animal = msg.content.title()
+        
+        await ctx.send(embed=nova_embed("nAME yOUR pET", f"wHAT wOULD yOU lIKE tO nAME yOUR {chosen_animal}?"))
+        
+        def name_check(m):
+            return m.author == ctx.author and m.channel == ctx.channel and len(m.content) <= 20
+        
+        name_msg = await bot.wait_for('message', check=name_check, timeout=30.0)
+        pet_name = name_msg.content
+        
+        # Create pet data
+        PET_DATA[user_id] = {
+            "name": pet_name,
+            "type": chosen_animal,
+            "level": 1,
+            "xp": 0,
+            "hunger": 100,
+            "cleanliness": 100,
+            "happiness": 100
+        }
+        save_pets()
+        
+        embed = nova_embed(
+            "🎉 aDOPTION sUCCESSFUL!",
+            f"cONGRATULATIONS! yOU aDOPTED {pet_name} tHE {chosen_animal}!\n"
+            f"uSE `?pet` tO iNTERACT wITH yOUR nEW fRIEND!"
+        )
+        embed.set_thumbnail(url=ctx.author.avatar.url if ctx.author.avatar else None)
+        await ctx.send(embed=embed)
+        
+    except asyncio.TimeoutError:
+        await ctx.send(embed=nova_embed("aDOPT pET", "aDOPTION tIMED oUT! tRY aGAIN lATER."))
+
+@bot.command()
+async def pet(ctx):
+    """Interact with your pet"""
+    user_id = str(ctx.author.id)
+    
+    if user_id not in PET_DATA:
+        await ctx.send(embed=nova_embed("pET", "yOU dON'T hAVE a pET! uSE `?adoptpet` tO aDOPT oNE!"))
+        return
+    
+    pet = PET_DATA[user_id]
+    
+    # Decrease stats over time (basic simulation)
+    import time
+    current_time = time.time()
+    if "last_update" not in pet:
+        pet["last_update"] = current_time
+    
+    time_diff = (current_time - pet["last_update"]) / 3600  # Hours
+    if time_diff > 1:  # Only update if more than 1 hour passed
+        pet["hunger"] = max(0, pet["hunger"] - int(time_diff * 5))
+        pet["cleanliness"] = max(0, pet["cleanliness"] - int(time_diff * 3))
+        pet["happiness"] = max(0, pet["happiness"] - int(time_diff * 2))
+        pet["last_update"] = current_time
+        save_pets()
+    
+    # Create status bars
+    def create_bar(value, max_val=100):
+        filled = int((value / max_val) * 10)
+        return "█" * filled + "░" * (10 - filled)
+    
+    embed = nova_embed(
+        f"{pet['name']} tHE {pet['type']}",
+        f"**lEVEL:** {pet['level']} (XP: {pet['xp']}/100)\n"
+        f"**hUNGER:** {create_bar(pet['hunger'])} {pet['hunger']}/100\n"
+        f"**cLEANLINESS:** {create_bar(pet['cleanliness'])} {pet['cleanliness']}/100\n"
+        f"**hAPPINESS:** {create_bar(pet['happiness'])} {pet['happiness']}/100"
+    )
+    
+    view = PetView(ctx.author.id)
+    await ctx.send(embed=embed, view=view)
+
+
 
 bot.run(TOKEN)

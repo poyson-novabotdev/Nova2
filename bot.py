@@ -24,6 +24,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.presences = True
+intents.guilds = True
 
 bot = commands.Bot(command_prefix="?", intents=intents, help_command=None)
 
@@ -39,6 +40,7 @@ RELATIONSHIPS_FILE = "relationships.json"
 REMINDERS_FILE = "reminders.json"
 THRIFT_FILE = "thrift.json"
 AFK_FILE = "afk.json"
+PROFILES_FILE = "profiles.json"
 
 balances = {}
 user_xp = {}
@@ -70,6 +72,11 @@ RUNWAY_CHANNEL_ID = None  # Set this to your runway channel ID
 
 # Chat logs system
 CHAT_LOGS_CHANNEL_ID = None  # Set by ?setchatlogs
+
+# New logging systems
+JOIN_LEAVE_LOGS_CHANNEL_ID = None  # Set by ?setjoinleavelogs
+SERVER_LOGS_CHANNEL_ID = None  # Set by ?setserverlogs
+MOD_LOGS_CHANNEL_ID = None  # Set by ?setmodlogs
 
 # International days dictionary (all 365 days, placeholder names)
 INTERNATIONAL_DAYS = {
@@ -227,7 +234,7 @@ INTERNATIONAL_DAYS = {
 
 def load_config():
     """Load configuration from CONFIG_FILE into the global config dict."""
-    global config, CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID
+    global config, CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID
     try:
         with open(CONFIG_FILE, "r") as f:
             config = json.load(f)
@@ -238,8 +245,11 @@ def load_config():
             TICKET_CATEGORY_ID = config.get("ticket_category_id")
             SUPPORT_ROLE_ID = config.get("support_role_id")
             TICKET_LOGS_CHANNEL_ID = config.get("ticket_logs_channel_id")
+            JOIN_LEAVE_LOGS_CHANNEL_ID = config.get("join_leave_logs_channel_id")
+            SERVER_LOGS_CHANNEL_ID = config.get("server_logs_channel_id")
+            MOD_LOGS_CHANNEL_ID = config.get("mod_logs_channel_id")
     except FileNotFoundError:
-        config = {"mod_role_id": None, "admin_role_id": None, "chat_logs_channel_id": None, "welcome_channel_id": None, "farewell_channel_id": None, "runway_channel_id": None, "ticket_category_id": None, "support_role_id": None, "ticket_logs_channel_id": None}
+        config = {"mod_role_id": None, "admin_role_id": None, "chat_logs_channel_id": None, "welcome_channel_id": None, "farewell_channel_id": None, "runway_channel_id": None, "ticket_category_id": None, "support_role_id": None, "ticket_logs_channel_id": None, "join_leave_logs_channel_id": None, "server_logs_channel_id": None, "mod_logs_channel_id": None}
         CHAT_LOGS_CHANNEL_ID = None
         WELCOME_CHANNEL_ID = None
         FAREWELL_CHANNEL_ID = None
@@ -247,10 +257,13 @@ def load_config():
         TICKET_CATEGORY_ID = None
         SUPPORT_ROLE_ID = None
         TICKET_LOGS_CHANNEL_ID = None
+        JOIN_LEAVE_LOGS_CHANNEL_ID = None
+        SERVER_LOGS_CHANNEL_ID = None
+        MOD_LOGS_CHANNEL_ID = None
 
 def save_config():
     """Save the current config dict to CONFIG_FILE."""
-    global CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID
+    global CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID
     config["chat_logs_channel_id"] = CHAT_LOGS_CHANNEL_ID
     config["welcome_channel_id"] = WELCOME_CHANNEL_ID
     config["farewell_channel_id"] = FAREWELL_CHANNEL_ID
@@ -258,6 +271,9 @@ def save_config():
     config["ticket_category_id"] = TICKET_CATEGORY_ID
     config["support_role_id"] = SUPPORT_ROLE_ID
     config["ticket_logs_channel_id"] = TICKET_LOGS_CHANNEL_ID
+    config["join_leave_logs_channel_id"] = JOIN_LEAVE_LOGS_CHANNEL_ID
+    config["server_logs_channel_id"] = SERVER_LOGS_CHANNEL_ID
+    config["mod_logs_channel_id"] = MOD_LOGS_CHANNEL_ID
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f)
 
@@ -396,6 +412,17 @@ def save_afk():
     with open(AFK_FILE, "w") as f:
         json.dump(data, f)
 
+def load_profiles():
+    try:
+        with open(PROFILES_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_profiles(profiles):
+    with open(PROFILES_FILE, "w") as f:
+        json.dump(profiles, f, indent=2)
+
 # Example usage in commands:
 # await ctx.send(embed=nova_embed("TITLE", "description"))
 # await interaction.response.send_message(embed=nova_embed("TITLE", "description"))
@@ -425,8 +452,7 @@ async def on_ready():
             if chat_channel:
                 print(f"✅ Chat logs channel found: {chat_channel.name}")
                 try:
-                    await chat_channel.send("🔧 Chat logs system online!")
-                    print("✅ Chat logs test message sent successfully")
+                    print("✅ Chat logs channel found and accessible")
                 except Exception as e:
                     print(f"❌ Chat logs permission error: {e}")
             else:
@@ -437,8 +463,7 @@ async def on_ready():
             if ticket_channel:
                 print(f"✅ Ticket logs channel found: {ticket_channel.name}")
                 try:
-                    await ticket_channel.send("🎫 Ticket logs system online!")
-                    print("✅ Ticket logs test message sent successfully")
+                    print("✅ Ticket logs channel found and accessible")
                 except Exception as e:
                     print(f"❌ Ticket logs permission error: {e}")
             else:
@@ -1915,16 +1940,48 @@ async def unmute_slash(interaction: discord.Interaction, member: discord.Member)
         await interaction.response.send_message(embed=nova_embed("uNMUTE", "cOULD nOT uNMUTE tHAT uSER!"), ephemeral=True)
 
 @bot.command()
-async def case(ctx):
-    cases = mod_cases.get(ctx.guild.id, [])
-    if not cases:
-        await ctx.send(embed=nova_embed("cASES", "nO mODERATION cASES fOUND!"))
+async def case(ctx, member: discord.Member = None):
+    """Show a member's past infractions"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("cASE", "Only mods/admins can view cases!"))
         return
-    desc = ""
-    for i, c in enumerate(cases, 1):
-        desc += f"**{i}.** `{c['action']}` by {c['user']} in {c['channel']} • {c['time'].strftime('%Y-%m-%d %H:%M:%S')}\n"
-    await ctx.send(embed=nova_embed("cASES", desc))
-    await ctx.send("Usage: ?case - Shows the last 20 moderation actions. Only mods/admins can use this.")
+    
+    if member is None:
+        await ctx.send(embed=nova_embed("cASE", "pLEASE sPECIFY a mEMBER!"))
+        return
+    
+    user_id = str(member.id)
+    
+    if user_id not in INFRACTIONS or not INFRACTIONS[user_id]:
+        embed = nova_embed(
+            f"📋 cASE fILE: {member.display_name}",
+            "nO iNFRACTIONS oN rECORD! 🎉"
+        )
+        embed.set_thumbnail(url=member.avatar.url if member.avatar else None)
+        await ctx.send(embed=embed)
+        return
+    
+    infractions = INFRACTIONS[user_id]
+    infraction_list = []
+    
+    for i, infraction in enumerate(infractions[-10:], 1):  # Show last 10
+        date_str = infraction["date"].strftime("%Y-%m-%d")
+        infraction_list.append(
+            f"**{i}.** {infraction['type'].upper()} - {date_str}\n"
+            f"   rEASON: {infraction['reason']}\n"
+            f"   mOD: {infraction['moderator']}"
+        )
+    
+    embed = nova_embed(
+        f"📋 cASE fILE: {member.display_name}",
+        f"tOTAL iNFRACTIONS: {len(infractions)}\n\n" + "\n\n".join(infraction_list)
+    )
+    embed.set_thumbnail(url=member.avatar.url if member.avatar else None)
+    
+    if len(infractions) > 10:
+        embed.set_footer(text=f"sHOWING lAST 10 oF {len(infractions)} iNFRACTIONS")
+    
+    await ctx.send(embed=embed)
 
 @bot.tree.command(name="case", description="Show all moderation actions in this server (up to 20)")
 async def case_slash(interaction: discord.Interaction):
@@ -2324,6 +2381,102 @@ async def today(ctx):
         )
         embed.set_footer(text="nOVA sAYS: mAYBE nEXT tIME!")
     await ctx.send(embed=embed)
+
+# Profile/About Me System
+@bot.command()
+async def aboutme(ctx, user: discord.Member = None):
+    """View someone's about me description."""
+    target_user = user or ctx.author
+    profiles = load_profiles()
+    
+    user_profile = profiles.get(str(target_user.id))
+    if not user_profile or "about_me" not in user_profile:
+        if target_user == ctx.author:
+            await ctx.send(embed=nova_embed("📝 aBOUT mE", "You haven't set an about me yet! Use ?setaboutme <description> to set one."))
+        else:
+            await ctx.send(embed=nova_embed("📝 aBOUT mE", f"{target_user.display_name} hasn't set an about me yet."))
+        return
+    
+    embed = discord.Embed(
+        title=f"📝 {target_user.display_name}'s About Me",
+        description=user_profile["about_me"],
+        color=0xff69b4
+    )
+    embed.set_thumbnail(url=target_user.display_avatar.url)
+    embed.set_footer(text=f"Set on {datetime.fromisoformat(user_profile['set_date']).strftime('%B %d, %Y')}")
+    
+    await ctx.send(embed=embed)
+
+# Slash commands for profiles
+@bot.tree.command(name="setaboutme", description="Set your about me description")
+@app_commands.describe(description="Your about me description (max 500 characters)")
+async def setaboutme_slash(interaction: discord.Interaction, description: str):
+    if len(description) > 500:
+        await interaction.response.send_message(embed=nova_embed("📝 sET aBOUT mE", "Description too long! Maximum 500 characters."), ephemeral=True)
+        return
+    
+    profiles = load_profiles()
+    
+    # Get old about me for logging
+    old_profile = profiles.get(str(interaction.user.id))
+    old_about_me = old_profile.get("about_me", "None") if old_profile else "None"
+    
+    profiles[str(interaction.user.id)] = {
+        "about_me": description,
+        "set_date": datetime.now().isoformat()
+    }
+    save_profiles(profiles)
+    
+    # Log to server logs channel
+    print(f"DEBUG: About me logging - SERVER_LOGS_CHANNEL_ID = {SERVER_LOGS_CHANNEL_ID}")
+    if SERVER_LOGS_CHANNEL_ID:
+        channel = interaction.guild.get_channel(SERVER_LOGS_CHANNEL_ID)
+        if channel:
+            print(f"DEBUG: Found server logs channel {channel.name}, sending about me update log")
+            embed = discord.Embed(
+                title="📝 About Me Updated",
+                color=0xff69b4,
+                timestamp=datetime.now()
+            )
+            embed.add_field(name="User", value=f"{interaction.user.mention}\n`{interaction.user.id}`", inline=True)
+            embed.add_field(name="Changes", value=f"**About Me:**\nBefore: {old_about_me}\nAfter: {description}", inline=False)
+            embed.set_thumbnail(url=interaction.user.display_avatar.url)
+            
+            try:
+                await channel.send(embed=embed)
+                print("DEBUG: About me update log sent successfully")
+            except Exception as e:
+                print(f"Failed to send about me update log: {e}")
+        else:
+            print(f"DEBUG: Could not find server logs channel with ID {SERVER_LOGS_CHANNEL_ID}")
+    else:
+        print("DEBUG: No server logs channel configured for about me logging")
+    
+    await interaction.response.send_message(embed=nova_embed("📝 aBOUT mE uPDATED", f"Your about me has been set to:\n\n*{description}*"))
+
+@bot.tree.command(name="aboutme", description="View someone's about me description")
+@app_commands.describe(user="The user to check (optional)")
+async def aboutme_slash(interaction: discord.Interaction, user: discord.Member = None):
+    target_user = user or interaction.user
+    profiles = load_profiles()
+    
+    user_profile = profiles.get(str(target_user.id))
+    if not user_profile or "about_me" not in user_profile:
+        if target_user == interaction.user:
+            await interaction.response.send_message(embed=nova_embed("📝 aBOUT mE", "You haven't set an about me yet! Use /setaboutme to set one."), ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=nova_embed("📝 aBOUT mE", f"{target_user.display_name} hasn't set an about me yet."), ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title=f"📝 {target_user.display_name}'s About Me",
+        description=user_profile["about_me"],
+        color=0xff69b4
+    )
+    embed.set_thumbnail(url=target_user.display_avatar.url)
+    embed.set_footer(text=f"Set on {datetime.fromisoformat(user_profile['set_date']).strftime('%B %d, %Y')}")
+    
+    await interaction.response.send_message(embed=embed)
 
 # Confessions/8ball/Therapy
 @bot.command()
@@ -3503,10 +3656,9 @@ async def on_member_join(member):
             member_count = member.guild.member_count
             member_number = member_count  # The new member is the latest count
             
-            # Create welcome message with rules, member count, and member number
+            # Create welcome message with specific rules channel
             description = f"wELCOME tO tHE sERVER, {member.mention}! 💖\n\n"
-            description += f"📋 pLEASE rEAD <#rules> tO gET sTARTED!\n"
-            description += f"👥 wE nOW hAVE {member_count} mEMBERS!\n"
+            description += f"📋 pLEASE rEAD <#1390109532851535962> tO gET sTARTED!\n"
             description += f"🎉 yOU aRE oUR {member_number}th mEMBER!\n\n"
             description += "mAKE yOURSELF aT hOME!"
             
@@ -4586,49 +4738,618 @@ async def pet(ctx):
     view = PetView(ctx.author.id)
     await ctx.send(embed=embed, view=view)
 
-# Infractions command to show member infractions
+
+
+# =========================
+# New Logging System Commands
+# =========================
+
+# Join/Leave logs setup
 @bot.command()
-async def infractions(ctx, member: discord.Member = None):
-    """Show a member's past infractions"""
+async def setjoinleavelogs(ctx, channel: discord.TextChannel = None):
+    """Set the join/leave logs channel (mods only)"""
     if not has_mod_or_admin(ctx):
-        await ctx.send(embed=nova_embed("cASE", "Only mods/admins can view cases!"))
+        await ctx.send(embed=nova_embed("sET jOIN/lEAVE lOGS", "Only mods/admins can set join/leave logs channel!"))
+        return
+    
+    global JOIN_LEAVE_LOGS_CHANNEL_ID
+    if channel is None:
+        JOIN_LEAVE_LOGS_CHANNEL_ID = None
+        await ctx.send(embed=nova_embed("sET jOIN/lEAVE lOGS", "Join/leave logs channel cleared!"))
+    else:
+        JOIN_LEAVE_LOGS_CHANNEL_ID = channel.id
+        await ctx.send(embed=nova_embed("sET jOIN/lEAVE lOGS", f"Join/leave logs channel set to: {channel.mention}"))
+    save_config()
+
+# Server logs setup
+@bot.command()
+async def setserverlogs(ctx, channel: discord.TextChannel = None):
+    """Set the server logs channel (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("sET sERVER lOGS", "Only mods/admins can set server logs channel!"))
+        return
+    
+    global SERVER_LOGS_CHANNEL_ID
+    if channel is None:
+        SERVER_LOGS_CHANNEL_ID = None
+        await ctx.send(embed=nova_embed("sET sERVER lOGS", "Server logs channel cleared!"))
+    else:
+        SERVER_LOGS_CHANNEL_ID = channel.id
+        await ctx.send(embed=nova_embed("sET sERVER lOGS", f"Server logs channel set to: {channel.mention}"))
+    save_config()
+
+# Mod logs setup
+@bot.command()
+async def setmodlogs(ctx, channel: discord.TextChannel = None):
+    """Set the mod logs channel (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("sET mOD lOGS", "Only mods/admins can set mod logs channel!"))
+        return
+    
+    global MOD_LOGS_CHANNEL_ID
+    if channel is None:
+        MOD_LOGS_CHANNEL_ID = None
+        await ctx.send(embed=nova_embed("sET mOD lOGS", "Mod logs channel cleared!"))
+    else:
+        MOD_LOGS_CHANNEL_ID = channel.id
+        await ctx.send(embed=nova_embed("sET mOD lOGS", f"Mod logs channel set to: {channel.mention}"))
+    save_config()
+
+# Helper function to log mod actions
+async def log_mod_action(guild, action, moderator, target, reason=None, duration=None):
+    """Log moderation actions to mod logs channel"""
+    if not MOD_LOGS_CHANNEL_ID:
+        return
+    
+    channel = guild.get_channel(MOD_LOGS_CHANNEL_ID)
+    if not channel:
+        return
+    
+    # Add to infractions system
+    if target:
+        add_infraction(target.id, action, reason or "No reason provided", str(moderator))
+    
+    # Create mod log embed
+    embed = discord.Embed(
+        title=f"🔨 {action.upper()}",
+        color=0xff6b6b,
+        timestamp=datetime.now()
+    )
+    
+    embed.add_field(name="Moderator", value=moderator.mention, inline=True)
+    if target:
+        embed.add_field(name="Target", value=f"{target.mention}\n`{target.id}`", inline=True)
+    embed.add_field(name="Action", value=action.title(), inline=True)
+    
+    if reason:
+        embed.add_field(name="Reason", value=reason, inline=False)
+    if duration:
+        embed.add_field(name="Duration", value=duration, inline=True)
+    
+    if target and target.avatar:
+        embed.set_thumbnail(url=target.avatar.url)
+    
+    try:
+        await channel.send(embed=embed)
+    except Exception as e:
+        print(f"Failed to send mod log: {e}")
+
+# =========================
+# Enhanced Event Handlers for Logging
+# =========================
+
+# Join/Leave logging
+@bot.event
+async def on_member_join(member):
+    # Existing welcome message code
+    if WELCOME_CHANNEL_ID:
+        channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
+        if channel:
+            # Get member count and calculate member number
+            member_count = member.guild.member_count
+            member_number = member_count  # The new member is the latest count
+            
+            # Create welcome message with specific rules channel
+            description = f"wELCOME tO tHE sERVER, {member.mention}! 💖\n\n"
+            description += f"📋 pLEASE rEAD <#1390109532851535962> tO gET sTARTED!\n"
+            description += f"🎉 yOU aRE oUR {member_number}th mEMBER!\n\n"
+            description += "mAKE yOURSELF aT hOME!"
+            
+            embed = nova_embed("👋 wELCOME!", description)
+            await channel.send(embed=embed)
+    
+    # New join logging
+    if JOIN_LEAVE_LOGS_CHANNEL_ID:
+        channel = member.guild.get_channel(JOIN_LEAVE_LOGS_CHANNEL_ID)
+        if channel:
+            embed = discord.Embed(
+                title="📥 User Joined",
+                color=0x00ff00,
+                timestamp=datetime.now()
+            )
+            
+            embed.add_field(name="User", value=f"{member.mention}\n{member.display_name}", inline=True)
+            embed.add_field(name="ID", value=f"`{member.id}`", inline=True)
+            embed.add_field(name="Members", value=f"{member.guild.member_count}", inline=True)
+            
+            embed.add_field(name="Account Created", value=f"<t:{int(member.created_at.timestamp())}:R>", inline=True)
+            embed.add_field(name="Joined Server", value=f"<t:{int(member.joined_at.timestamp())}:R>", inline=True)
+            
+            if member.avatar:
+                embed.set_thumbnail(url=member.avatar.url)
+            
+            embed.set_footer(text=f"Member #{member.guild.member_count}")
+            
+            try:
+                await channel.send(embed=embed)
+            except Exception as e:
+                print(f"Failed to send join log: {e}")
+
+@bot.event
+async def on_member_remove(member):
+    # Existing farewell message code
+    if FAREWELL_CHANNEL_ID:
+        channel = member.guild.get_channel(FAREWELL_CHANNEL_ID)
+        if channel:
+            embed = nova_embed(
+                "👋 gOODBYE!",
+                f"{member.display_name} hAS lEFT tHE sERVER. wE'LL mISS yOU! 💔"
+            )
+            await channel.send(embed=embed)
+    
+    # New leave logging
+    if JOIN_LEAVE_LOGS_CHANNEL_ID:
+        channel = member.guild.get_channel(JOIN_LEAVE_LOGS_CHANNEL_ID)
+        if channel:
+            embed = discord.Embed(
+                title="📤 User Left",
+                color=0xff0000,
+                timestamp=datetime.now()
+            )
+            
+            embed.add_field(name="User", value=f"{member.mention}\n{member.display_name}", inline=True)
+            embed.add_field(name="ID", value=f"`{member.id}`", inline=True)
+            embed.add_field(name="Members", value=f"{member.guild.member_count}", inline=True)
+            
+            if member.joined_at:
+                embed.add_field(name="Joined Server", value=f"<t:{int(member.joined_at.timestamp())}:R>", inline=True)
+            
+            # Get roles (excluding @everyone)
+            roles = [role.mention for role in member.roles[1:]] if len(member.roles) > 1 else ["None"]
+            if roles and roles != ["None"]:
+                embed.add_field(name="Roles", value=", ".join(roles[:10]), inline=False)
+            
+            if member.avatar:
+                embed.set_thumbnail(url=member.avatar.url)
+            
+            try:
+                await channel.send(embed=embed)
+            except Exception as e:
+                print(f"Failed to send leave log: {e}")
+
+# Server/Member update logging
+@bot.event
+async def on_member_update(before, after):
+    """Log member profile changes"""
+    print(f"DEBUG: Member update event triggered for {after.display_name}")
+    print(f"DEBUG: SERVER_LOGS_CHANNEL_ID = {SERVER_LOGS_CHANNEL_ID}")
+    
+    if not SERVER_LOGS_CHANNEL_ID:
+        print("DEBUG: No server logs channel configured")
+        return
+    
+    channel = before.guild.get_channel(SERVER_LOGS_CHANNEL_ID)
+    if not channel:
+        print(f"DEBUG: Could not find channel with ID {SERVER_LOGS_CHANNEL_ID}")
+        return
+    
+    print(f"DEBUG: Found channel {channel.name}")
+    changes = []
+    
+    # Check for nickname changes
+    print(f"DEBUG: Checking display name changes - Before: '{before.display_name}', After: '{after.display_name}'")
+    if before.display_name != after.display_name:
+        print("DEBUG: Display name change detected!")
+        changes.append(f"**Display Name:**\nBefore: `{before.display_name}`\nAfter: `{after.display_name}`")
+    else:
+        print("DEBUG: No display name change detected")
+    
+    # Check for role changes
+    if before.roles != after.roles:
+        added_roles = set(after.roles) - set(before.roles)
+        removed_roles = set(before.roles) - set(after.roles)
+        
+        if added_roles:
+            role_mentions = [role.mention for role in added_roles]
+            changes.append(f"**Roles Added:** {', '.join(role_mentions)}")
+        
+        if removed_roles:
+            role_mentions = [role.mention for role in removed_roles]
+            changes.append(f"**Roles Removed:** {', '.join(role_mentions)}")
+    
+    # Check for avatar changes
+    if before.avatar != after.avatar:
+        before_avatar = before.avatar.url if before.avatar else "None"
+        after_avatar = after.avatar.url if after.avatar else "None"
+        changes.append(f"**Avatar:**\nBefore: {before_avatar}\nAfter: {after_avatar}")
+    
+    if changes:
+        embed = discord.Embed(
+            title="👤 Member Updated",
+            color=0xffaa00,
+            timestamp=datetime.now()
+        )
+        
+        embed.add_field(name="User", value=f"{after.mention}\n`{after.id}`", inline=True)
+        embed.add_field(name="Changes", value="\n".join(changes), inline=False)
+        
+        if after.avatar:
+            embed.set_thumbnail(url=after.avatar.url)
+        
+        try:
+            await channel.send(embed=embed)
+        except Exception as e:
+            print(f"Failed to send member update log: {e}")
+
+@bot.event
+async def on_user_update(before, after):
+    """Log user profile changes (username, discriminator, avatar)"""
+    if not SERVER_LOGS_CHANNEL_ID:
+        return
+    
+    # Find mutual guilds to log in
+    for guild in bot.guilds:
+        if guild.get_member(after.id):
+            channel = guild.get_channel(SERVER_LOGS_CHANNEL_ID)
+            if not channel:
+                continue
+            
+            changes = []
+            
+            # Check for username changes
+            if before.name != after.name:
+                changes.append(f"**Username:**\nBefore: `{before.name}`\nAfter: `{after.name}`")
+            
+            # Check for discriminator changes (if applicable)
+            if hasattr(before, 'discriminator') and hasattr(after, 'discriminator'):
+                if before.discriminator != after.discriminator:
+                    changes.append(f"**Discriminator:**\nBefore: `#{before.discriminator}`\nAfter: `#{after.discriminator}`")
+            
+            # Check for avatar changes
+            if before.avatar != after.avatar:
+                before_avatar = before.avatar.url if before.avatar else "None"
+                after_avatar = after.avatar.url if after.avatar else "None"
+                changes.append(f"**Avatar:**\nBefore: {before_avatar}\nAfter: {after_avatar}")
+            
+            if changes:
+                embed = discord.Embed(
+                    title="🔄 User Profile Updated",
+                    color=0x00aaff,
+                    timestamp=datetime.now()
+                )
+                
+                embed.add_field(name="User", value=f"{after.mention}\n`{after.id}`", inline=True)
+                embed.add_field(name="Changes", value="\n".join(changes), inline=False)
+                
+                if after.avatar:
+                    embed.set_thumbnail(url=after.avatar.url)
+                
+                try:
+                    await channel.send(embed=embed)
+                except Exception as e:
+                    print(f"Failed to send user update log: {e}")
+            
+            break  # Only log once per user update
+
+# Test event to see if guild events work at all
+@bot.event
+async def on_guild_role_create(role):
+    print(f"DEBUG: Role created event fired: {role.name}")
+
+@bot.event
+async def on_guild_update(before, after):
+    """Log server changes"""
+    print(f"DEBUG: Guild update event triggered for {after.name}")
+    print(f"DEBUG: SERVER_LOGS_CHANNEL_ID = {SERVER_LOGS_CHANNEL_ID}")
+    
+    if not SERVER_LOGS_CHANNEL_ID:
+        print("DEBUG: No server logs channel configured")
+        return
+    
+    channel = bot.get_channel(SERVER_LOGS_CHANNEL_ID)
+    if not channel:
+        print(f"DEBUG: Could not find channel with ID {SERVER_LOGS_CHANNEL_ID}")
+        return
+    
+    print(f"DEBUG: Found channel {channel.name}")
+    changes = []
+    
+    # Check for server name changes
+    if before.name != after.name:
+        changes.append(f"**Server Name:**\nBefore: `{before.name}`\nAfter: `{after.name}`")
+    
+    # Check for icon changes
+    print(f"DEBUG: Checking icon changes - Before: {before.icon}, After: {after.icon}")
+    if before.icon != after.icon:
+        print("DEBUG: Icon change detected!")
+        before_icon = before.icon.url if before.icon else "None"
+        after_icon = after.icon.url if after.icon else "None"
+        changes.append(f"**Server Icon:**\nBefore: {before_icon}\nAfter: {after_icon}")
+    else:
+        print("DEBUG: No icon change detected")
+    
+    # Check for description changes
+    print(f"DEBUG: Checking description changes - Before: '{before.description}', After: '{after.description}'")
+    if before.description != after.description:
+        print("DEBUG: Description change detected!")
+        before_desc = before.description or "None"
+        after_desc = after.description or "None"
+        changes.append(f"**Description:**\nBefore: `{before_desc}`\nAfter: `{after_desc}`")
+    else:
+        print("DEBUG: No description change detected")
+    
+    if changes:
+        embed = discord.Embed(
+            title="🏠 Server Updated",
+            color=0xaa00ff,
+            timestamp=datetime.now()
+        )
+        
+        embed.add_field(name="Changes", value="\n".join(changes), inline=False)
+        
+        if after.icon:
+            embed.set_thumbnail(url=after.icon.url)
+        
+        try:
+            await channel.send(embed=embed)
+        except Exception as e:
+            print(f"Failed to send server update log: {e}")
+
+# =========================
+# New Moderation Commands
+# =========================
+
+# Unwarn command - Remove the most recent warning from a user
+@bot.command()
+async def unwarn(ctx, member: discord.Member = None):
+    """Remove the most recent warning from a member (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("uNWARN", "yOU dON'T hAVE pERMISSION!"))
         return
     
     if member is None:
-        await ctx.send(embed=nova_embed("cASE", "pLEASE sPECIFY a mEMBER!"))
+        await ctx.send("Usage: ?unwarn @user - Removes the most recent warning from a member. Only mods/admins can use this.")
         return
     
     user_id = str(member.id)
     
     if user_id not in INFRACTIONS or not INFRACTIONS[user_id]:
-        embed = nova_embed(
-            f"📋 cASE fILE: {member.display_name}",
-            "nO iNFRACTIONS oN rECORD! 🎉"
-        )
-        embed.set_thumbnail(url=member.avatar.url if member.avatar else None)
-        await ctx.send(embed=embed)
+        await ctx.send(embed=nova_embed("uNWARN", f"{member.mention} hAS nO wARNINGS tO rEMOVE!"))
         return
     
-    infractions = INFRACTIONS[user_id]
-    infraction_list = []
+    # Find and remove the most recent warning
+    warnings = [inf for inf in INFRACTIONS[user_id] if inf['type'].lower() == 'warn']
     
-    for i, infraction in enumerate(infractions[-10:], 1):  # Show last 10
-        date_str = infraction["date"].strftime("%Y-%m-%d")
-        infraction_list.append(
-            f"**{i}.** {infraction['type'].upper()} - {date_str}\n"
-            f"   rEASON: {infraction['reason']}\n"
-            f"   mOD: {infraction['moderator']}"
-        )
+    if not warnings:
+        await ctx.send(embed=nova_embed("uNWARN", f"{member.mention} hAS nO wARNINGS tO rEMOVE!"))
+        return
+    
+    # Remove the most recent warning
+    most_recent_warning = max(warnings, key=lambda x: x['date'])
+    INFRACTIONS[user_id].remove(most_recent_warning)
+    
+    # Clean up empty infraction lists
+    if not INFRACTIONS[user_id]:
+        del INFRACTIONS[user_id]
+    
+    save_infractions()
     
     embed = nova_embed(
-        f"📋 cASE fILE: {member.display_name}",
-        f"tOTAL iNFRACTIONS: {len(infractions)}\n\n" + "\n\n".join(infraction_list)
+        "uNWARN", 
+        f"rEMOVED mOST rECENT wARNING fROM {member.mention}\n"
+        f"rEASON wAS: {most_recent_warning['reason']}"
     )
-    embed.set_thumbnail(url=member.avatar.url if member.avatar else None)
-    
-    if len(infractions) > 10:
-        embed.set_footer(text=f"sHOWING lAST 10 oF {len(infractions)} iNFRACTIONS")
-    
     await ctx.send(embed=embed)
+
+# Slash command version of unwarn
+@bot.tree.command(name="unwarn", description="Remove the most recent warning from a member (mods only)")
+@app_commands.describe(member="The member to remove a warning from")
+async def unwarn_slash(interaction: discord.Interaction, member: discord.Member):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("uNWARN", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    user_id = str(member.id)
+    
+    if user_id not in INFRACTIONS or not INFRACTIONS[user_id]:
+        await interaction.response.send_message(embed=nova_embed("uNWARN", f"{member.mention} hAS nO wARNINGS tO rEMOVE!"), ephemeral=True)
+        return
+    
+    # Find and remove the most recent warning
+    warnings = [inf for inf in INFRACTIONS[user_id] if inf['type'].lower() == 'warn']
+    
+    if not warnings:
+        await interaction.response.send_message(embed=nova_embed("uNWARN", f"{member.mention} hAS nO wARNINGS tO rEMOVE!"), ephemeral=True)
+        return
+    
+    # Remove the most recent warning
+    most_recent_warning = max(warnings, key=lambda x: x['date'])
+    INFRACTIONS[user_id].remove(most_recent_warning)
+    
+    # Clean up empty infraction lists
+    if not INFRACTIONS[user_id]:
+        del INFRACTIONS[user_id]
+    
+    save_infractions()
+    
+    embed = nova_embed(
+        "uNWARN", 
+        f"rEMOVED mOST rECENT wARNING fROM {member.mention}\n"
+        f"rEASON wAS: {most_recent_warning['reason']}"
+    )
+    await interaction.response.send_message(embed=embed)
+
+# Unban command - Unban a user by ID
+@bot.command()
+async def unban(ctx, user_id: int = None, *, reason="No reason provided"):
+    """Unban a user by their ID (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("uNBAN", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    if user_id is None:
+        await ctx.send("Usage: ?unban <user_id> [reason] - Unbans a user by their ID. Only mods/admins can use this.")
+        return
+    
+    try:
+        # Get the banned user
+        banned_users = [entry async for entry in ctx.guild.bans(limit=2000)]
+        banned_user = None
+        
+        for ban_entry in banned_users:
+            if ban_entry.user.id == user_id:
+                banned_user = ban_entry.user
+                break
+        
+        if banned_user is None:
+            await ctx.send(embed=nova_embed("uNBAN", f"uSER wITH iD {user_id} iS nOT bANNED!"))
+            return
+        
+        # Unban the user
+        await ctx.guild.unban(banned_user, reason=reason)
+        
+        # Log the case
+        log_case(ctx.guild.id, "Unban", ctx.author, ctx.channel, datetime.now(dt_timezone.utc))
+        
+        embed = nova_embed(
+            "uNBAN", 
+            f"uNBANNED {banned_user.mention} ({banned_user.name})\n"
+            f"rEASON: {reason}"
+        )
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(embed=nova_embed("uNBAN", f"fAILED tO uNBAN: {e}"))
+
+# Slash command version of unban
+@bot.tree.command(name="unban", description="Unban a user by their ID (mods only)")
+@app_commands.describe(user_id="The ID of the user to unban", reason="Reason for unbanning")
+async def unban_slash(interaction: discord.Interaction, user_id: str, reason: str = "No reason provided"):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("uNBAN", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    try:
+        user_id_int = int(user_id)
+        
+        # Get the banned user
+        banned_users = [entry async for entry in interaction.guild.bans(limit=2000)]
+        banned_user = None
+        
+        for ban_entry in banned_users:
+            if ban_entry.user.id == user_id_int:
+                banned_user = ban_entry.user
+                break
+        
+        if banned_user is None:
+            await interaction.response.send_message(embed=nova_embed("uNBAN", f"uSER wITH iD {user_id} iS nOT bANNED!"), ephemeral=True)
+            return
+        
+        # Unban the user
+        await interaction.guild.unban(banned_user, reason=reason)
+        
+        # Log the case
+        log_case(interaction.guild.id, "Unban", interaction.user, interaction.channel, datetime.now(dt_timezone.utc))
+        
+        embed = nova_embed(
+            "uNBAN", 
+            f"uNBANNED {banned_user.mention} ({banned_user.name})\n"
+            f"rEASON: {reason}"
+        )
+        await interaction.response.send_message(embed=embed)
+        
+    except ValueError:
+        await interaction.response.send_message(embed=nova_embed("uNBAN", "iNVALID uSER iD!"), ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(embed=nova_embed("uNBAN", f"fAILED tO uNBAN: {e}"), ephemeral=True)
+
+# Clear case command - Clear all infractions for a user
+@bot.command()
+async def clearcase(ctx, member: discord.Member = None):
+    """Clear all infractions for a member (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("cLEAR cASE", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    if member is None:
+        await ctx.send("Usage: ?clearcase @user - Clears all infractions for a member. Only mods/admins can use this.")
+        return
+    
+    user_id = str(member.id)
+    
+    if user_id not in INFRACTIONS or not INFRACTIONS[user_id]:
+        await ctx.send(embed=nova_embed("cLEAR cASE", f"{member.mention} hAS nO iNFRACTIONS tO cLEAR!"))
+        return
+    
+    # Count infractions before clearing
+    infraction_count = len(INFRACTIONS[user_id])
+    
+    # Clear all infractions
+    del INFRACTIONS[user_id]
+    save_infractions()
+    
+    # Log the case clearing
+    log_case(ctx.guild.id, "Clear Case", ctx.author, ctx.channel, datetime.now(dt_timezone.utc))
+    
+    embed = nova_embed(
+        "cLEAR cASE", 
+        f"cLEARED aLL {infraction_count} iNFRACTIONS fOR {member.mention}\n"
+        f"tHEIR rECORD iS nOW cLEAN! ✨"
+    )
+    await ctx.send(embed=embed)
+
+# Slash command version of clearcase
+@bot.tree.command(name="clearcase", description="Clear all infractions for a member (mods only)")
+@app_commands.describe(member="The member to clear infractions for")
+async def clearcase_slash(interaction: discord.Interaction, member: discord.Member):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("cLEAR cASE", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    user_id = str(member.id)
+    
+    if user_id not in INFRACTIONS or not INFRACTIONS[user_id]:
+        await interaction.response.send_message(embed=nova_embed("cLEAR cASE", f"{member.mention} hAS nO iNFRACTIONS tO cLEAR!"), ephemeral=True)
+        return
+    
+    # Count infractions before clearing
+    infraction_count = len(INFRACTIONS[user_id])
+    
+    # Clear all infractions
+    del INFRACTIONS[user_id]
+    save_infractions()
+    
+    # Log the case clearing
+    log_case(interaction.guild.id, "Clear Case", interaction.user, interaction.channel, datetime.now(dt_timezone.utc))
+    
+    embed = nova_embed(
+        "cLEAR cASE", 
+        f"cLEARED aLL {infraction_count} iNFRACTIONS fOR {member.mention}\n"
+        f"tHEIR rECORD iS nOW cLEAN! ✨"
+    )
+    await interaction.response.send_message(embed=embed)
+
+# Helper function for slash command permission checking
+def has_mod_or_admin_interaction(interaction):
+    """Check if the user has mod or admin privileges for slash commands"""
+    if interaction.user.id == OWNER_ID:
+        return True
+    
+    mod_role_id = config.get('MOD_ROLE_ID')
+    admin_role_id = config.get('ADMIN_ROLE_ID')
+    
+    user_role_ids = [role.id for role in interaction.user.roles]
+    
+    return (mod_role_id and mod_role_id in user_role_ids) or (admin_role_id and admin_role_id in user_role_ids)
 
 bot.run(TOKEN)
