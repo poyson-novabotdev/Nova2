@@ -6,6 +6,7 @@ from discord.ext import commands
 import json
 import random
 from datetime import datetime, timedelta, timezone as dt_timezone
+import pytz
 import os
 from dotenv import load_dotenv
 from discord import app_commands
@@ -41,6 +42,10 @@ REMINDERS_FILE = "reminders.json"
 THRIFT_FILE = "thrift.json"
 AFK_FILE = "afk.json"
 PROFILES_FILE = "profiles.json"
+BCA_NOMINATIONS_FILE = "bca_nominations.json"
+BCA_VOTES_FILE = "bca_votes.json"
+BCA_CATEGORIES_FILE = "bca_categories.json"
+BCA_COUNTDOWNS_FILE = "bca_countdowns.json"
 
 balances = {}
 user_xp = {}
@@ -77,6 +82,18 @@ CHAT_LOGS_CHANNEL_ID = None  # Set by ?setchatlogs
 JOIN_LEAVE_LOGS_CHANNEL_ID = None  # Set by ?setjoinleavelogs
 SERVER_LOGS_CHANNEL_ID = None  # Set by ?setserverlogs
 MOD_LOGS_CHANNEL_ID = None  # Set by ?setmodlogs
+
+# BCA (Brabz Choice Awards) system
+BCA_NOMINATIONS_CHANNEL_ID = None  # Set by ?setbcanominations
+BCA_NOMINATIONS_LOGS_CHANNEL_ID = None  # Set by ?setbcanominationslogs
+BCA_VOTING_CHANNEL_ID = None  # Set by ?setbcavoting
+BCA_VOTING_LOGS_CHANNEL_ID = None  # Set by ?setbcavotinglogs
+BCA_CATEGORIES = {}  # category_name: {"allow_self_nomination": bool}
+BCA_NOMINATIONS = {}  # category: {user_id: {"nominee": user_id, "nominator": user_id}}
+BCA_VOTES = {}  # category: {user_id: nominee_id}
+BCA_COUNTDOWNS = {}  # event_name: {"end_time": datetime, "description": str}
+BCA_NOMINATION_DEADLINE = None  # datetime when nominations close
+BCA_VOTING_DEADLINE = None  # datetime when voting closes
 
 # International days dictionary (all 365 days, placeholder names)
 INTERNATIONAL_DAYS = {
@@ -234,7 +251,7 @@ INTERNATIONAL_DAYS = {
 
 def load_config():
     """Load configuration from CONFIG_FILE into the global config dict."""
-    global config, CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID
+    global config, CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID, BCA_NOMINATIONS_CHANNEL_ID, BCA_NOMINATIONS_LOGS_CHANNEL_ID, BCA_VOTING_CHANNEL_ID, BCA_VOTING_LOGS_CHANNEL_ID, BCA_CATEGORIES, BCA_NOMINATIONS, BCA_VOTES, BCA_COUNTDOWNS, BCA_NOMINATION_DEADLINE, BCA_VOTING_DEADLINE
     try:
         with open(CONFIG_FILE, "r") as f:
             config = json.load(f)
@@ -248,6 +265,18 @@ def load_config():
             JOIN_LEAVE_LOGS_CHANNEL_ID = config.get("join_leave_logs_channel_id")
             SERVER_LOGS_CHANNEL_ID = config.get("server_logs_channel_id")
             MOD_LOGS_CHANNEL_ID = config.get("mod_logs_channel_id")
+            BCA_NOMINATIONS_CHANNEL_ID = config.get("bca_nominations_channel_id")
+            BCA_NOMINATIONS_LOGS_CHANNEL_ID = config.get("bca_nominations_logs_channel_id")
+            BCA_VOTING_CHANNEL_ID = config.get("bca_voting_channel_id")
+            BCA_VOTING_LOGS_CHANNEL_ID = config.get("bca_voting_logs_channel_id")
+            # Load BCA data from files
+            BCA_CATEGORIES = load_bca_categories()
+            BCA_NOMINATIONS = load_bca_nominations()
+            BCA_VOTES = load_bca_votes()
+            BCA_COUNTDOWNS = load_bca_countdowns()
+            # Load BCA deadlines
+            BCA_NOMINATION_DEADLINE = datetime.fromisoformat(config.get("bca_nomination_deadline")) if config.get("bca_nomination_deadline") else None
+            BCA_VOTING_DEADLINE = datetime.fromisoformat(config.get("bca_voting_deadline")) if config.get("bca_voting_deadline") else None
     except FileNotFoundError:
         config = {"mod_role_id": None, "admin_role_id": None, "chat_logs_channel_id": None, "welcome_channel_id": None, "farewell_channel_id": None, "runway_channel_id": None, "ticket_category_id": None, "support_role_id": None, "ticket_logs_channel_id": None, "join_leave_logs_channel_id": None, "server_logs_channel_id": None, "mod_logs_channel_id": None}
         CHAT_LOGS_CHANNEL_ID = None
@@ -260,10 +289,20 @@ def load_config():
         JOIN_LEAVE_LOGS_CHANNEL_ID = None
         SERVER_LOGS_CHANNEL_ID = None
         MOD_LOGS_CHANNEL_ID = None
+        BCA_NOMINATIONS_CHANNEL_ID = None
+        BCA_NOMINATIONS_LOGS_CHANNEL_ID = None
+        BCA_VOTING_CHANNEL_ID = None
+        BCA_VOTING_LOGS_CHANNEL_ID = None
+        BCA_CATEGORIES = {}
+        BCA_NOMINATIONS = {}
+        BCA_VOTES = {}
+        BCA_COUNTDOWNS = {}
+        BCA_NOMINATION_DEADLINE = None
+        BCA_VOTING_DEADLINE = None
 
 def save_config():
     """Save the current config dict to CONFIG_FILE."""
-    global CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID
+    global CHAT_LOGS_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID, BCA_NOMINATIONS_CHANNEL_ID, BCA_NOMINATIONS_LOGS_CHANNEL_ID, BCA_VOTING_CHANNEL_ID, BCA_VOTING_LOGS_CHANNEL_ID, BCA_NOMINATION_DEADLINE, BCA_VOTING_DEADLINE
     config["chat_logs_channel_id"] = CHAT_LOGS_CHANNEL_ID
     config["welcome_channel_id"] = WELCOME_CHANNEL_ID
     config["farewell_channel_id"] = FAREWELL_CHANNEL_ID
@@ -274,6 +313,12 @@ def save_config():
     config["join_leave_logs_channel_id"] = JOIN_LEAVE_LOGS_CHANNEL_ID
     config["server_logs_channel_id"] = SERVER_LOGS_CHANNEL_ID
     config["mod_logs_channel_id"] = MOD_LOGS_CHANNEL_ID
+    config["bca_nominations_channel_id"] = BCA_NOMINATIONS_CHANNEL_ID
+    config["bca_nominations_logs_channel_id"] = BCA_NOMINATIONS_LOGS_CHANNEL_ID
+    config["bca_voting_channel_id"] = BCA_VOTING_CHANNEL_ID
+    config["bca_voting_logs_channel_id"] = BCA_VOTING_LOGS_CHANNEL_ID
+    config["bca_nomination_deadline"] = BCA_NOMINATION_DEADLINE.isoformat() if BCA_NOMINATION_DEADLINE else None
+    config["bca_voting_deadline"] = BCA_VOTING_DEADLINE.isoformat() if BCA_VOTING_DEADLINE else None
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f)
 
@@ -422,6 +467,62 @@ def load_profiles():
 def save_profiles(profiles):
     with open(PROFILES_FILE, "w") as f:
         json.dump(profiles, f, indent=2)
+
+# BCA System Data Functions
+def load_bca_categories():
+    try:
+        with open(BCA_CATEGORIES_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_bca_categories(categories):
+    with open(BCA_CATEGORIES_FILE, "w") as f:
+        json.dump(categories, f, indent=2)
+
+def load_bca_nominations():
+    try:
+        with open(BCA_NOMINATIONS_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_bca_nominations(nominations):
+    with open(BCA_NOMINATIONS_FILE, "w") as f:
+        json.dump(nominations, f, indent=2)
+
+def load_bca_votes():
+    try:
+        with open(BCA_VOTES_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_bca_votes(votes):
+    with open(BCA_VOTES_FILE, "w") as f:
+        json.dump(votes, f, indent=2)
+
+def load_bca_countdowns():
+    try:
+        with open(BCA_COUNTDOWNS_FILE, "r") as f:
+            data = json.load(f)
+            # Convert ISO strings back to datetime objects
+            for event_name, event_data in data.items():
+                event_data["end_time"] = datetime.fromisoformat(event_data["end_time"])
+            return data
+    except FileNotFoundError:
+        return {}
+
+def save_bca_countdowns(countdowns):
+    with open(BCA_COUNTDOWNS_FILE, "w") as f:
+        # Convert datetime objects to ISO strings for JSON serialization
+        data = {}
+        for event_name, event_data in countdowns.items():
+            data[event_name] = {
+                "end_time": event_data["end_time"].isoformat(),
+                "description": event_data["description"]
+            }
+        json.dump(data, f, indent=2)
 
 # Example usage in commands:
 # await ctx.send(embed=nova_embed("TITLE", "description"))
@@ -905,7 +1006,8 @@ async def nuke(ctx):
         return
     await ctx.channel.purge(limit=1000)
     await ctx.send("boom")
-    await ctx.send("Usage: ?nuke - Deletes all messages in the channel. Only mods/admins can use this.")
+    # Log the mod action
+    await log_mod_action(ctx.guild, "nuke", ctx.author, None, f"Nuked all messages in {ctx.channel.mention}")
 
 @bot.command()
 async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
@@ -915,6 +1017,8 @@ async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
     try:
         await member.kick(reason=reason)
         await ctx.send(f"Kicked {member} for: {reason}")
+        # Log the mod action
+        await log_mod_action(ctx.guild, "kick", ctx.author, member, reason)
     except Exception as e:
         await ctx.send(f"Failed to kick: {e}")
 
@@ -929,6 +1033,8 @@ async def ban(ctx, member: discord.Member = None, *, reason="No reason provided"
     try:
         await member.ban(reason=reason)
         await ctx.send(f"Banned {member} for: {reason}")
+        # Log the mod action
+        await log_mod_action(ctx.guild, "ban", ctx.author, member, reason)
     except Exception as e:
         await ctx.send(f"Failed to ban: {e}")
 
@@ -942,6 +1048,8 @@ async def clear(ctx, amount: int = None):
         return
     deleted = await ctx.channel.purge(limit=amount)
     await ctx.send(f"Cleared {len(deleted)} messages", delete_after=3)
+    # Log the mod action
+    await log_mod_action(ctx.guild, "clear", ctx.author, None, f"Cleared {len(deleted)} messages in {ctx.channel.mention}")
 
 @bot.command()
 async def reactionroles(ctx):
@@ -3834,6 +3942,8 @@ async def warn(ctx, member: discord.Member = None, *, reason="No reason provided
     try:
         # Log the warning
         log_case(ctx.guild.id, "Warn", ctx.author, ctx.channel, datetime.now(datetime.timezone.utc))
+        # Log to mod logs channel
+        await log_mod_action(ctx.guild, "warn", ctx.author, member, reason)
         # DM the user
         try:
             await member.send(embed=nova_embed("wARNED bY nOVA", f"yOU wERE wARNED iN {ctx.guild.name} bY {ctx.author.mention} fOR: {reason}"))
@@ -3853,6 +3963,8 @@ async def warn_slash(interaction: discord.Interaction, member: discord.Member, r
         return
     try:
         log_case(interaction.guild.id, "Warn", interaction.user, interaction.channel, datetime.now(datetime.timezone.utc))
+        # Log to mod logs channel
+        await log_mod_action(interaction.guild, "warn", interaction.user, member, reason)
         try:
             await member.send(embed=nova_embed("wARNED bY nOVA", f"yOU wERE wARNED iN {interaction.guild.name} bY {interaction.user.mention} fOR: {reason}"))
         except Exception:
@@ -4938,108 +5050,138 @@ async def on_member_update(before, after):
         print("DEBUG: No server logs channel configured")
         return
     
-    channel = before.guild.get_channel(SERVER_LOGS_CHANNEL_ID)
-    if not channel:
-        print(f"DEBUG: Could not find channel with ID {SERVER_LOGS_CHANNEL_ID}")
-        return
-    
-    print(f"DEBUG: Found channel {channel.name}")
-    changes = []
-    
-    # Check for nickname changes
-    print(f"DEBUG: Checking display name changes - Before: '{before.display_name}', After: '{after.display_name}'")
-    if before.display_name != after.display_name:
-        print("DEBUG: Display name change detected!")
-        changes.append(f"**Display Name:**\nBefore: `{before.display_name}`\nAfter: `{after.display_name}`")
-    else:
-        print("DEBUG: No display name change detected")
-    
-    # Check for role changes
-    if before.roles != after.roles:
-        added_roles = set(after.roles) - set(before.roles)
-        removed_roles = set(before.roles) - set(after.roles)
+    try:
+        channel = before.guild.get_channel(SERVER_LOGS_CHANNEL_ID)
+        if not channel:
+            print(f"DEBUG: Could not find channel with ID {SERVER_LOGS_CHANNEL_ID}")
+            return
         
-        if added_roles:
-            role_mentions = [role.mention for role in added_roles]
-            changes.append(f"**Roles Added:** {', '.join(role_mentions)}")
+        print(f"DEBUG: Found channel {channel.name}")
+        changes = []
         
-        if removed_roles:
-            role_mentions = [role.mention for role in removed_roles]
-            changes.append(f"**Roles Removed:** {', '.join(role_mentions)}")
-    
-    # Check for avatar changes
-    if before.avatar != after.avatar:
-        before_avatar = before.avatar.url if before.avatar else "None"
-        after_avatar = after.avatar.url if after.avatar else "None"
-        changes.append(f"**Avatar:**\nBefore: {before_avatar}\nAfter: {after_avatar}")
-    
-    if changes:
-        embed = discord.Embed(
-            title="👤 Member Updated",
-            color=0xffaa00,
-            timestamp=datetime.now()
-        )
+        # Check for nickname changes (display_name includes nickname or username)
+        print(f"DEBUG: Checking display name changes - Before: '{before.display_name}', After: '{after.display_name}'")
+        print(f"DEBUG: Checking nick changes - Before: '{before.nick}', After: '{after.nick}'")
+        if before.nick != after.nick:
+            print("DEBUG: Nickname change detected!")
+            before_nick = before.nick if before.nick else "None"
+            after_nick = after.nick if after.nick else "None"
+            changes.append(f"**Nickname:**\nBefore: `{before_nick}`\nAfter: `{after_nick}`")
         
-        embed.add_field(name="User", value=f"{after.mention}\n`{after.id}`", inline=True)
-        embed.add_field(name="Changes", value="\n".join(changes), inline=False)
+        # Check for role changes
+        if before.roles != after.roles:
+            print("DEBUG: Role change detected!")
+            added_roles = set(after.roles) - set(before.roles)
+            removed_roles = set(before.roles) - set(after.roles)
+            
+            if added_roles:
+                role_mentions = [role.mention for role in added_roles]
+                changes.append(f"**Roles Added:** {', '.join(role_mentions)}")
+            
+            if removed_roles:
+                role_mentions = [role.mention for role in removed_roles]
+                changes.append(f"**Roles Removed:** {', '.join(role_mentions)}")
         
-        if after.avatar:
-            embed.set_thumbnail(url=after.avatar.url)
+        # Check for avatar changes
+        print(f"DEBUG: Checking avatar changes - Before: {before.avatar}, After: {after.avatar}")
+        if before.avatar != after.avatar:
+            print("DEBUG: Avatar change detected!")
+            before_avatar = before.avatar.url if before.avatar else "None"
+            after_avatar = after.avatar.url if after.avatar else "None"
+            changes.append(f"**Avatar:**\nBefore: {before_avatar}\nAfter: {after_avatar}")
         
-        try:
+        if changes:
+            print(f"DEBUG: Sending member update log with {len(changes)} changes")
+            embed = discord.Embed(
+                title="👤 Member Updated",
+                color=0xffaa00,
+                timestamp=datetime.now()
+            )
+            
+            embed.add_field(name="User", value=f"{after.mention}\n`{after.id}`", inline=True)
+            embed.add_field(name="Changes", value="\n".join(changes), inline=False)
+            
+            if after.avatar:
+                embed.set_thumbnail(url=after.avatar.url)
+            
             await channel.send(embed=embed)
-        except Exception as e:
-            print(f"Failed to send member update log: {e}")
+            print("DEBUG: Member update log sent successfully")
+        else:
+            print("DEBUG: No changes detected for member update")
+            
+    except Exception as e:
+        print(f"ERROR in on_member_update: {e}")
+        import traceback
+        traceback.print_exc()
 
 @bot.event
 async def on_user_update(before, after):
     """Log user profile changes (username, discriminator, avatar)"""
+    print(f"DEBUG: User update event triggered for {after.name}")
+    print(f"DEBUG: SERVER_LOGS_CHANNEL_ID = {SERVER_LOGS_CHANNEL_ID}")
+    
     if not SERVER_LOGS_CHANNEL_ID:
+        print("DEBUG: No server logs channel configured")
         return
     
-    # Find mutual guilds to log in
-    for guild in bot.guilds:
-        if guild.get_member(after.id):
-            channel = guild.get_channel(SERVER_LOGS_CHANNEL_ID)
-            if not channel:
-                continue
-            
-            changes = []
-            
-            # Check for username changes
-            if before.name != after.name:
-                changes.append(f"**Username:**\nBefore: `{before.name}`\nAfter: `{after.name}`")
-            
-            # Check for discriminator changes (if applicable)
-            if hasattr(before, 'discriminator') and hasattr(after, 'discriminator'):
-                if before.discriminator != after.discriminator:
-                    changes.append(f"**Discriminator:**\nBefore: `#{before.discriminator}`\nAfter: `#{after.discriminator}`")
-            
-            # Check for avatar changes
-            if before.avatar != after.avatar:
-                before_avatar = before.avatar.url if before.avatar else "None"
-                after_avatar = after.avatar.url if after.avatar else "None"
-                changes.append(f"**Avatar:**\nBefore: {before_avatar}\nAfter: {after_avatar}")
-            
-            if changes:
-                embed = discord.Embed(
-                    title="🔄 User Profile Updated",
-                    color=0x00aaff,
-                    timestamp=datetime.now()
-                )
+    try:
+        # Find mutual guilds to log in
+        for guild in bot.guilds:
+            if guild.get_member(after.id):
+                channel = guild.get_channel(SERVER_LOGS_CHANNEL_ID)
+                if not channel:
+                    print(f"DEBUG: Could not find channel with ID {SERVER_LOGS_CHANNEL_ID} in guild {guild.name}")
+                    continue
                 
-                embed.add_field(name="User", value=f"{after.mention}\n`{after.id}`", inline=True)
-                embed.add_field(name="Changes", value="\n".join(changes), inline=False)
+                print(f"DEBUG: Found channel {channel.name} in guild {guild.name}")
+                changes = []
                 
-                if after.avatar:
-                    embed.set_thumbnail(url=after.avatar.url)
+                # Check for username changes
+                print(f"DEBUG: Checking username changes - Before: '{before.name}', After: '{after.name}'")
+                if before.name != after.name:
+                    print("DEBUG: Username change detected!")
+                    changes.append(f"**Username:**\nBefore: `{before.name}`\nAfter: `{after.name}`")
                 
-                try:
+                # Check for discriminator changes (if applicable)
+                if hasattr(before, 'discriminator') and hasattr(after, 'discriminator'):
+                    print(f"DEBUG: Checking discriminator changes - Before: '{before.discriminator}', After: '{after.discriminator}'")
+                    if before.discriminator != after.discriminator:
+                        print("DEBUG: Discriminator change detected!")
+                        changes.append(f"**Discriminator:**\nBefore: `#{before.discriminator}`\nAfter: `#{after.discriminator}`")
+                
+                # Check for avatar changes
+                print(f"DEBUG: Checking user avatar changes - Before: {before.avatar}, After: {after.avatar}")
+                if before.avatar != after.avatar:
+                    print("DEBUG: User avatar change detected!")
+                    before_avatar = before.avatar.url if before.avatar else "None"
+                    after_avatar = after.avatar.url if after.avatar else "None"
+                    changes.append(f"**Avatar:**\nBefore: {before_avatar}\nAfter: {after_avatar}")
+                
+                if changes:
+                    print(f"DEBUG: Sending user update log with {len(changes)} changes")
+                    embed = discord.Embed(
+                        title="🔄 User Profile Updated",
+                        color=0x00aaff,
+                        timestamp=datetime.now()
+                    )
+                    
+                    embed.add_field(name="User", value=f"{after.mention}\n`{after.id}`", inline=True)
+                    embed.add_field(name="Changes", value="\n".join(changes), inline=False)
+                    
+                    if after.avatar:
+                        embed.set_thumbnail(url=after.avatar.url)
+                    
                     await channel.send(embed=embed)
-                except Exception as e:
-                    print(f"Failed to send user update log: {e}")
-            
-            break  # Only log once per user update
+                    print("DEBUG: User update log sent successfully")
+                else:
+                    print("DEBUG: No changes detected for user update")
+                
+                break  # Only log once per user update
+                
+    except Exception as e:
+        print(f"ERROR in on_user_update: {e}")
+        import traceback
+        traceback.print_exc()
 
 # Test event to see if guild events work at all
 @bot.event
@@ -5056,54 +5198,59 @@ async def on_guild_update(before, after):
         print("DEBUG: No server logs channel configured")
         return
     
-    channel = bot.get_channel(SERVER_LOGS_CHANNEL_ID)
-    if not channel:
-        print(f"DEBUG: Could not find channel with ID {SERVER_LOGS_CHANNEL_ID}")
-        return
-    
-    print(f"DEBUG: Found channel {channel.name}")
-    changes = []
-    
-    # Check for server name changes
-    if before.name != after.name:
-        changes.append(f"**Server Name:**\nBefore: `{before.name}`\nAfter: `{after.name}`")
-    
-    # Check for icon changes
-    print(f"DEBUG: Checking icon changes - Before: {before.icon}, After: {after.icon}")
-    if before.icon != after.icon:
-        print("DEBUG: Icon change detected!")
-        before_icon = before.icon.url if before.icon else "None"
-        after_icon = after.icon.url if after.icon else "None"
-        changes.append(f"**Server Icon:**\nBefore: {before_icon}\nAfter: {after_icon}")
-    else:
-        print("DEBUG: No icon change detected")
-    
-    # Check for description changes
-    print(f"DEBUG: Checking description changes - Before: '{before.description}', After: '{after.description}'")
-    if before.description != after.description:
-        print("DEBUG: Description change detected!")
-        before_desc = before.description or "None"
-        after_desc = after.description or "None"
-        changes.append(f"**Description:**\nBefore: `{before_desc}`\nAfter: `{after_desc}`")
-    else:
-        print("DEBUG: No description change detected")
-    
-    if changes:
-        embed = discord.Embed(
-            title="🏠 Server Updated",
-            color=0xaa00ff,
-            timestamp=datetime.now()
-        )
+    try:
+        channel = bot.get_channel(SERVER_LOGS_CHANNEL_ID)
+        if not channel:
+            print(f"DEBUG: Could not find channel with ID {SERVER_LOGS_CHANNEL_ID}")
+            return
         
-        embed.add_field(name="Changes", value="\n".join(changes), inline=False)
+        print(f"DEBUG: Found channel {channel.name}")
+        changes = []
         
-        if after.icon:
-            embed.set_thumbnail(url=after.icon.url)
+        # Check for server name changes
+        print(f"DEBUG: Checking name changes - Before: '{before.name}', After: '{after.name}'")
+        if before.name != after.name:
+            print("DEBUG: Server name change detected!")
+            changes.append(f"**Server Name:**\nBefore: `{before.name}`\nAfter: `{after.name}`")
         
-        try:
+        # Check for icon changes
+        print(f"DEBUG: Checking icon changes - Before: {before.icon}, After: {after.icon}")
+        if before.icon != after.icon:
+            print("DEBUG: Server icon change detected!")
+            before_icon = before.icon.url if before.icon else "None"
+            after_icon = after.icon.url if after.icon else "None"
+            changes.append(f"**Server Icon:**\nBefore: {before_icon}\nAfter: {after_icon}")
+        
+        # Check for description changes
+        print(f"DEBUG: Checking description changes - Before: '{before.description}', After: '{after.description}'")
+        if before.description != after.description:
+            print("DEBUG: Description change detected!")
+            before_desc = before.description or "None"
+            after_desc = after.description or "None"
+            changes.append(f"**Description:**\nBefore: `{before_desc}`\nAfter: `{after_desc}`")
+        
+        if changes:
+            print(f"DEBUG: Sending server update log with {len(changes)} changes")
+            embed = discord.Embed(
+                title="🏠 Server Updated",
+                color=0xaa00ff,
+                timestamp=datetime.now()
+            )
+            
+            embed.add_field(name="Changes", value="\n".join(changes), inline=False)
+            
+            if after.icon:
+                embed.set_thumbnail(url=after.icon.url)
+            
             await channel.send(embed=embed)
-        except Exception as e:
-            print(f"Failed to send server update log: {e}")
+            print("DEBUG: Server update log sent successfully")
+        else:
+            print("DEBUG: No changes detected for server update")
+            
+    except Exception as e:
+        print(f"ERROR in on_guild_update: {e}")
+        import traceback
+        traceback.print_exc()
 
 # =========================
 # New Moderation Commands
@@ -5144,6 +5291,9 @@ async def unwarn(ctx, member: discord.Member = None):
     
     save_infractions()
     
+    # Log to mod logs channel
+    await log_mod_action(ctx.guild, "unwarn", ctx.author, member, f"Removed warning: {most_recent_warning['reason']}")
+    
     embed = nova_embed(
         "uNWARN", 
         f"rEMOVED mOST rECENT wARNING fROM {member.mention}\n"
@@ -5181,6 +5331,9 @@ async def unwarn_slash(interaction: discord.Interaction, member: discord.Member)
         del INFRACTIONS[user_id]
     
     save_infractions()
+    
+    # Log to mod logs channel
+    await log_mod_action(interaction.guild, "unwarn", interaction.user, member, f"Removed warning: {most_recent_warning['reason']}")
     
     embed = nova_embed(
         "uNWARN", 
@@ -5220,6 +5373,8 @@ async def unban(ctx, user_id: int = None, *, reason="No reason provided"):
         
         # Log the case
         log_case(ctx.guild.id, "Unban", ctx.author, ctx.channel, datetime.now(dt_timezone.utc))
+        # Log to mod logs channel
+        await log_mod_action(ctx.guild, "unban", ctx.author, banned_user, reason)
         
         embed = nova_embed(
             "uNBAN", 
@@ -5260,6 +5415,8 @@ async def unban_slash(interaction: discord.Interaction, user_id: str, reason: st
         
         # Log the case
         log_case(interaction.guild.id, "Unban", interaction.user, interaction.channel, datetime.now(dt_timezone.utc))
+        # Log to mod logs channel
+        await log_mod_action(interaction.guild, "unban", interaction.user, banned_user, reason)
         
         embed = nova_embed(
             "uNBAN", 
@@ -5300,6 +5457,8 @@ async def clearcase(ctx, member: discord.Member = None):
     
     # Log the case clearing
     log_case(ctx.guild.id, "Clear Case", ctx.author, ctx.channel, datetime.now(dt_timezone.utc))
+    # Log to mod logs channel
+    await log_mod_action(ctx.guild, "clearcase", ctx.author, member, f"Cleared {infraction_count} infractions")
     
     embed = nova_embed(
         "cLEAR cASE", 
@@ -5331,6 +5490,8 @@ async def clearcase_slash(interaction: discord.Interaction, member: discord.Memb
     
     # Log the case clearing
     log_case(interaction.guild.id, "Clear Case", interaction.user, interaction.channel, datetime.now(dt_timezone.utc))
+    # Log to mod logs channel
+    await log_mod_action(interaction.guild, "clearcase", interaction.user, member, f"Cleared {infraction_count} infractions")
     
     embed = nova_embed(
         "cLEAR cASE", 
@@ -5351,5 +5512,1443 @@ def has_mod_or_admin_interaction(interaction):
     user_role_ids = [role.id for role in interaction.user.roles]
     
     return (mod_role_id and mod_role_id in user_role_ids) or (admin_role_id and admin_role_id in user_role_ids)
+
+# =========================
+# BCA (Brabz Choice Awards) System
+# =========================
+
+# Setup Commands
+@bot.command()
+async def setbcanominations(ctx, channel: discord.TextChannel = None):
+    """Set the BCA nominations channel (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("sET bCA nOMINATIONS", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    global BCA_NOMINATIONS_CHANNEL_ID
+    if channel is None:
+        BCA_NOMINATIONS_CHANNEL_ID = None
+        await ctx.send(embed=nova_embed("sET bCA nOMINATIONS", "bCA nOMINATIONS cHANNEL dISABLED!"))
+    else:
+        BCA_NOMINATIONS_CHANNEL_ID = channel.id
+        await ctx.send(embed=nova_embed("sET bCA nOMINATIONS", f"bCA nOMINATIONS cHANNEL sET tO {channel.mention}!"))
+    save_config()
+
+@bot.command()
+async def setbcanominationslogs(ctx, channel: discord.TextChannel = None):
+    """Set the BCA nominations logs channel (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("sET bCA nOMINATIONS lOGS", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    global BCA_NOMINATIONS_LOGS_CHANNEL_ID
+    if channel is None:
+        BCA_NOMINATIONS_LOGS_CHANNEL_ID = None
+        await ctx.send(embed=nova_embed("sET bCA nOMINATIONS lOGS", "bCA nOMINATIONS lOGS cHANNEL dISABLED!"))
+    else:
+        BCA_NOMINATIONS_LOGS_CHANNEL_ID = channel.id
+        await ctx.send(embed=nova_embed("sET bCA nOMINATIONS lOGS", f"bCA nOMINATIONS lOGS cHANNEL sET tO {channel.mention}!"))
+    save_config()
+
+@bot.command()
+async def setbcavotinglogs(ctx, channel: discord.TextChannel = None):
+    """Set the BCA voting logs channel (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("sET bCA vOTING lOGS", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    global BCA_VOTING_LOGS_CHANNEL_ID
+    if channel is None:
+        BCA_VOTING_LOGS_CHANNEL_ID = None
+        await ctx.send(embed=nova_embed("sET bCA vOTING lOGS", "bCA vOTING lOGS cHANNEL dISABLED!"))
+    else:
+        BCA_VOTING_LOGS_CHANNEL_ID = channel.id
+        await ctx.send(embed=nova_embed("sET bCA vOTING lOGS", f"bCA vOTING lOGS cHANNEL sET tO {channel.mention}!"))
+    save_config()
+
+@bot.command()
+async def setbcavoting(ctx, channel: discord.TextChannel = None):
+    """Set the BCA voting channel (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("sET bCA vOTING", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    global BCA_VOTING_CHANNEL_ID
+    if channel is None:
+        BCA_VOTING_CHANNEL_ID = None
+        await ctx.send(embed=nova_embed("sET bCA vOTING", "bCA vOTING cHANNEL dISABLED!"))
+    else:
+        BCA_VOTING_CHANNEL_ID = channel.id
+        await ctx.send(embed=nova_embed("sET bCA vOTING", f"bCA vOTING cHANNEL sET tO {channel.mention}!"))
+    save_config()
+
+# BCA Deadline Management
+@bot.command()
+async def setbcanomdeadline(ctx, *, end_time: str = None):
+    """Set nomination deadline (mods only). Format: YYYY-MM-DD HH:MM"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("sET nOM dEADLINE", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    global BCA_NOMINATION_DEADLINE
+    
+    if end_time is None:
+        BCA_NOMINATION_DEADLINE = None
+        await ctx.send(embed=nova_embed("sET nOM dEADLINE", "nOMINATION dEADLINE rEMOVED!"))
+    else:
+        try:
+            # Parse time as EST
+            est = pytz.timezone('US/Eastern')
+            naive_datetime = datetime.strptime(end_time, "%Y-%m-%d %H:%M")
+            est_datetime = est.localize(naive_datetime)
+            # Convert to UTC for storage
+            utc_datetime = est_datetime.astimezone(pytz.UTC)
+            BCA_NOMINATION_DEADLINE = utc_datetime
+            
+            # Show confirmation in EST
+            await ctx.send(embed=nova_embed("sET nOM dEADLINE", f"nOMINATION dEADLINE sET tO:\n{est_datetime.strftime('%Y-%m-%d at %H:%M EST')}"))
+        except ValueError:
+            await ctx.send(embed=nova_embed("sET nOM dEADLINE", "iNVALID dATE fORMAT! uSE: YYYY-MM-DD HH:MM (EST)\n\nExample: 2024-12-31 23:59"))
+            return
+    
+    # Reset announcement tracker when deadline changes
+    reset_announcement_tracker()
+    save_config()
+
+@bot.command()
+async def setbcavotedeadline(ctx, *, end_time: str = None):
+    """Set voting deadline (mods only). Format: YYYY-MM-DD HH:MM"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("sET vOTE dEADLINE", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    global BCA_VOTING_DEADLINE
+    
+    if end_time is None:
+        BCA_VOTING_DEADLINE = None
+        await ctx.send(embed=nova_embed("sET vOTE dEADLINE", "vOTING dEADLINE rEMOVED!"))
+    else:
+        try:
+            # Parse time as EST
+            est = pytz.timezone('US/Eastern')
+            naive_datetime = datetime.strptime(end_time, "%Y-%m-%d %H:%M")
+            est_datetime = est.localize(naive_datetime)
+            # Convert to UTC for storage
+            utc_datetime = est_datetime.astimezone(pytz.UTC)
+            BCA_VOTING_DEADLINE = utc_datetime
+            
+            # Show confirmation in EST
+            await ctx.send(embed=nova_embed("sET vOTE dEADLINE", f"vOTING dEADLINE sET tO:\n{est_datetime.strftime('%Y-%m-%d at %H:%M EST')}"))
+        except ValueError:
+            await ctx.send(embed=nova_embed("sET vOTE dEADLINE", "iNVALID dATE fORMAT! uSE: YYYY-MM-DD HH:MM (EST)\n\nExample: 2024-12-31 23:59"))
+            return
+    
+    # Reset announcement tracker when deadline changes
+    reset_announcement_tracker()
+    save_config()
+
+@bot.command()
+async def bcadeadlines(ctx):
+    """Show current BCA deadlines"""
+    embed = discord.Embed(
+        title="⏰ bCA dEADLINES",
+        color=0xff69b4,
+        timestamp=datetime.now()
+    )
+    
+    if BCA_NOMINATION_DEADLINE:
+        # Convert UTC deadline to EST for display
+        est = pytz.timezone('US/Eastern')
+        now_utc = datetime.now(pytz.UTC)
+        deadline_est = BCA_NOMINATION_DEADLINE.astimezone(est)
+        
+        time_diff = BCA_NOMINATION_DEADLINE - now_utc
+        if time_diff.total_seconds() <= 0:
+            nom_status = "cLOSED"
+        else:
+            days = time_diff.days
+            hours, remainder = divmod(time_diff.seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+            nom_status = f"{days}d {hours}h {minutes}m remaining"
+        
+        embed.add_field(
+            name="📝 nOMINATIONS",
+            value=f"**Deadline:** {deadline_est.strftime('%Y-%m-%d at %H:%M EST')}\n**Status:** {nom_status}",
+            inline=False
+        )
+    else:
+        embed.add_field(name="📝 nOMINATIONS", value="nO dEADLINE sET", inline=False)
+    
+    if BCA_VOTING_DEADLINE:
+        # Convert UTC deadline to EST for display
+        est = pytz.timezone('US/Eastern')
+        now_utc = datetime.now(pytz.UTC)
+        deadline_est = BCA_VOTING_DEADLINE.astimezone(est)
+        
+        time_diff = BCA_VOTING_DEADLINE - now_utc
+        if time_diff.total_seconds() <= 0:
+            vote_status = "cLOSED"
+        else:
+            days = time_diff.days
+            hours, remainder = divmod(time_diff.seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+            vote_status = f"{days}d {hours}h {minutes}m remaining"
+        
+        embed.add_field(
+            name="🗺️ vOTING",
+            value=f"**Deadline:** {deadline_est.strftime('%Y-%m-%d at %H:%M EST')}\n**Status:** {vote_status}",
+            inline=False
+        )
+    else:
+        embed.add_field(name="🗳️ vOTING", value="nO dEADLINE sET", inline=False)
+    
+    await ctx.send(embed=embed)
+
+# Category Management
+@bot.command()
+async def bcaaddcategory(ctx, *, category_name: str = None):
+    """Add a BCA category (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("bCA aDD cATEGORY", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    if category_name is None:
+        await ctx.send(embed=nova_embed("bCA aDD cATEGORY", "Usage: ?bcaaddcategory <category name>"))
+        return
+    
+    global BCA_CATEGORIES
+    category_name = category_name.lower()
+    
+    if category_name in BCA_CATEGORIES:
+        await ctx.send(embed=nova_embed("bCA aDD cATEGORY", f"cATEGORY '{category_name}' aLREADY eXISTS!"))
+        return
+    
+    BCA_CATEGORIES[category_name] = {"allow_self_nomination": False}
+    save_bca_categories(BCA_CATEGORIES)
+    
+    await ctx.send(embed=nova_embed("bCA aDD cATEGORY", f"aDDED cATEGORY: {category_name}\n\nsELF-nOMINATION: dISABLED"))
+
+@bot.command()
+async def bcatoggleself(ctx, *, category_name: str = None):
+    """Toggle self-nomination for a BCA category (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("bCA tOGGLE sELF", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    if category_name is None:
+        await ctx.send(embed=nova_embed("bCA tOGGLE sELF", "Usage: ?bcatoggleself <category name>"))
+        return
+    
+    global BCA_CATEGORIES
+    category_name = category_name.lower()
+    
+    if category_name not in BCA_CATEGORIES:
+        await ctx.send(embed=nova_embed("bCA tOGGLE sELF", f"cATEGORY '{category_name}' dOESN'T eXIST!"))
+        return
+    
+    BCA_CATEGORIES[category_name]["allow_self_nomination"] = not BCA_CATEGORIES[category_name]["allow_self_nomination"]
+    save_bca_categories(BCA_CATEGORIES)
+    
+    status = "eNABLED" if BCA_CATEGORIES[category_name]["allow_self_nomination"] else "dISABLED"
+    await ctx.send(embed=nova_embed("bCA tOGGLE sELF", f"sELF-nOMINATION fOR '{category_name}': {status}"))
+
+@bot.command()
+async def bcacategories(ctx):
+    """List all BCA categories"""
+    global BCA_CATEGORIES
+    
+    if not BCA_CATEGORIES:
+        await ctx.send(embed=nova_embed("bCA cATEGORIES", "nO cATEGORIES sET uP yET!"))
+        return
+    
+    category_list = []
+    for category, settings in BCA_CATEGORIES.items():
+        self_nom = "✅" if settings["allow_self_nomination"] else "❌"
+        category_list.append(f"**{category.title()}** - Self-nomination: {self_nom}")
+    
+    embed = discord.Embed(
+        title="🏆 bCA cATEGORIES",
+        description="\n".join(category_list),
+        color=0xff69b4
+    )
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def resetnominations(ctx, *, category: str = None):
+    """Reset nominations for a category or all categories (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("rESET nOMINATIONS", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    global BCA_NOMINATIONS
+    
+    if category is None:
+        # Reset all nominations
+        BCA_NOMINATIONS = {}
+        save_bca_nominations(BCA_NOMINATIONS)
+        await ctx.send(embed=nova_embed("rESET nOMINATIONS", "🗑️ aLL nOMINATIONS hAVE bEEN rESET!"))
+    else:
+        category = category.lower()
+        if category not in BCA_CATEGORIES:
+            await ctx.send(embed=nova_embed("rESET nOMINATIONS", f"cATEGORY '{category}' dOESN'T eXIST!"))
+            return
+        
+        # Reset nominations for specific category
+        if category in BCA_NOMINATIONS:
+            del BCA_NOMINATIONS[category]
+            save_bca_nominations(BCA_NOMINATIONS)
+            await ctx.send(embed=nova_embed("rESET nOMINATIONS", f"🗑️ nOMINATIONS fOR '{category.title()}' hAVE bEEN rESET!"))
+        else:
+            await ctx.send(embed=nova_embed("rESET nOMINATIONS", f"nO nOMINATIONS fOUND fOR '{category.title()}'!"))
+
+@bot.command()
+async def resetvotes(ctx, *, category: str = None):
+    """Reset votes for a category or all categories (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("rESET vOTES", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    global BCA_VOTES
+    
+    if category is None:
+        # Reset all votes
+        BCA_VOTES = {}
+        save_bca_votes(BCA_VOTES)
+        await ctx.send(embed=nova_embed("rESET vOTES", "🗑️ aLL vOTES hAVE bEEN rESET!"))
+    else:
+        category = category.lower()
+        if category not in BCA_CATEGORIES:
+            await ctx.send(embed=nova_embed("rESET vOTES", f"cATEGORY '{category}' dOESN'T eXIST!"))
+            return
+        
+        # Reset votes for specific category
+        if category in BCA_VOTES:
+            del BCA_VOTES[category]
+            save_bca_votes(BCA_VOTES)
+            await ctx.send(embed=nova_embed("rESET vOTES", f"🗑️ vOTES fOR '{category.title()}' hAVE bEEN rESET!"))
+        else:
+            await ctx.send(embed=nova_embed("rESET vOTES", f"nO vOTES fOUND fOR '{category.title()}'!"))
+
+@bot.command()
+async def bcanominations(ctx):
+    """Show all current nominations across all categories (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("bCA nOMINATIONS", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    global BCA_CATEGORIES, BCA_NOMINATIONS
+    
+    if not BCA_CATEGORIES:
+        await ctx.send(embed=nova_embed("bCA nOMINATIONS", "nO cATEGORIES sET uP yET!"))
+        return
+    
+    embed = discord.Embed(
+        title="🏆 bCA nOMINATIONS oVERVIEW",
+        color=0xff69b4
+    )
+    
+    total_nominations = 0
+    categories_with_noms = 0
+    
+    for category in BCA_CATEGORIES.keys():
+        if category in BCA_NOMINATIONS and BCA_NOMINATIONS[category]:
+            # Count nominations for this category
+            nominee_counts = {}
+            for nominator_id, nomination_data in BCA_NOMINATIONS[category].items():
+                nominee_id = nomination_data['nominee']
+                if nominee_id not in nominee_counts:
+                    nominee_counts[nominee_id] = 0
+                nominee_counts[nominee_id] += 1
+            
+            # Sort by nomination count (descending)
+            sorted_nominees = sorted(nominee_counts.items(), key=lambda x: x[1], reverse=True)
+            
+            # Build category text
+            category_text = []
+            for nominee_id, count in sorted_nominees:
+                member = ctx.guild.get_member(int(nominee_id))
+                if member:
+                    plural = "person" if count == 1 else "people"
+                    category_text.append(f"• {member.mention} (nominated by {count} {plural})")
+            
+            if category_text:
+                nom_count = len(BCA_NOMINATIONS[category])
+                embed.add_field(
+                    name=f"📝 {category.title()} ({nom_count} nominations)",
+                    value="\n".join(category_text),
+                    inline=False
+                )
+                total_nominations += nom_count
+                categories_with_noms += 1
+        else:
+            # No nominations for this category
+            embed.add_field(
+                name=f"📝 {category.title()} (0 nominations)",
+                value="• nO nOMINATIONS yET",
+                inline=False
+            )
+    
+    # Add summary footer
+    if total_nominations > 0:
+        embed.set_footer(text=f"tOTAL: {total_nominations} nominations across {categories_with_noms}/{len(BCA_CATEGORIES)} categories")
+    else:
+        embed.set_footer(text="nO nOMINATIONS yET")
+    
+    await ctx.send(embed=embed)
+
+# Nomination System
+@bot.command()
+async def nominate(ctx, nominee: discord.Member = None, *, category: str = None):
+    """Nominate someone for a BCA category"""
+    # Delete the original message for privacy (even on errors)
+    try:
+        await ctx.message.delete()
+    except discord.errors.NotFound:
+        pass  # Message already deleted
+    except discord.errors.Forbidden:
+        pass  # No permission to delete
+    
+    if nominee is None or category is None:
+        try:
+            await ctx.author.send(embed=nova_embed("nOMINATE", "Usage: ?nominate @user <category name>\n\nExample: ?nominate @username Best Memer"))
+        except discord.errors.Forbidden:
+            await ctx.send(embed=nova_embed("nOMINATE", "Usage: ?nominate @user <category name>"), delete_after=10)
+        return
+    
+    global BCA_CATEGORIES, BCA_NOMINATIONS
+    category = category.lower()
+    
+    # Check if nominations are still open
+    if BCA_NOMINATION_DEADLINE and datetime.now(pytz.UTC) > BCA_NOMINATION_DEADLINE:
+        # Convert UTC deadline to EST for display
+        est = pytz.timezone('US/Eastern')
+        deadline_est = BCA_NOMINATION_DEADLINE.astimezone(est)
+        try:
+            await ctx.author.send(embed=nova_embed("nOMINATE", f"nOMINATIONS fOR '{category}' hAVE cLOSED!\n\nDeadline was: {deadline_est.strftime('%Y-%m-%d at %H:%M EST')}"))
+        except discord.errors.Forbidden:
+            await ctx.send(embed=nova_embed("nOMINATE", f"nOMINATIONS fOR '{category}' hAVE cLOSED!"), delete_after=10)
+        return
+    
+    # Check if category exists
+    if category not in BCA_CATEGORIES:
+        try:
+            await ctx.author.send(embed=nova_embed("nOMINATE", f"cATEGORY '{category}' dOESN'T eXIST!\n\nUse ?bcacategories to see available categories."))
+        except discord.errors.Forbidden:
+            await ctx.send(embed=nova_embed("nOMINATE", f"cATEGORY '{category}' dOESN'T eXIST!"), delete_after=10)
+        return
+    
+    # Check self-nomination rules
+    if nominee == ctx.author and not BCA_CATEGORIES[category]["allow_self_nomination"]:
+        try:
+            await ctx.author.send(embed=nova_embed("nOMINATE", f"sELF-nOMINATION iS nOT aLLOWED fOR '{category}'!"))
+        except discord.errors.Forbidden:
+            await ctx.send(embed=nova_embed("nOMINATE", f"sELF-nOMINATION iS nOT aLLOWED fOR '{category}'!"), delete_after=10)
+        return
+    
+    # Check if user already nominated in this category
+    if category not in BCA_NOMINATIONS:
+        BCA_NOMINATIONS[category] = {}
+    
+    # Check if user already nominated in this category - allow changes during deadline
+    is_changing_nomination = str(ctx.author.id) in BCA_NOMINATIONS[category]
+    if is_changing_nomination:
+        current_nominee = BCA_NOMINATIONS[category][str(ctx.author.id)]["nominee"]
+        current_member = ctx.guild.get_member(int(current_nominee))
+        
+        # If nominating the same person, just confirm
+        if str(nominee.id) == current_nominee:
+            try:
+                await ctx.author.send(embed=nova_embed("nOMINATION cONFIRMED", f"yOU aLREADY nOMINATED {nominee.mention} fOR '{category.title()}'!\n\n🎆 yOUR nOMINATION sTANDS!"))
+            except discord.errors.Forbidden:
+                await ctx.send(embed=nova_embed("nOMINATION cONFIRMED", f"yOU aLREADY nOMINATED {nominee.mention} fOR '{category.title()}'!"), delete_after=10)
+            return
+    
+    # Add nomination
+    BCA_NOMINATIONS[category][str(ctx.author.id)] = {
+        "nominee": str(nominee.id),
+        "nominator": str(ctx.author.id)
+    }
+    save_bca_nominations(BCA_NOMINATIONS)
+    
+    # Send private confirmation to nominator via DM
+    if is_changing_nomination:
+        confirmation_title = "nOMINATION cHANGED"
+        confirmation_msg = f"yOU cHANGED yOUR nOMINATION tO {nominee.mention} fOR '{category.title()}'!\n\n🔄 aNONYMOUS nOMINATION uPDATED!\n\n💡 You can change again during the deadline period."
+    else:
+        confirmation_title = "nOMINATION sUBMITTED"
+        confirmation_msg = f"yOU nOMINATED {nominee.mention} fOR '{category.title()}'!\n\n🎆 aNONYMOUS nOMINATION sUBMITTED!\n\n💡 You can change your nomination during the deadline period."
+    
+    try:
+        await ctx.author.send(embed=nova_embed(confirmation_title, confirmation_msg))
+    except discord.errors.Forbidden:
+        # Fallback to ephemeral message if DMs are disabled
+        await ctx.send(embed=nova_embed(confirmation_title, confirmation_msg.replace(nominee.mention, nominee.display_name)), delete_after=10)
+    
+    # Log to nominations logs channel (mods can see who nominated who)
+    if BCA_NOMINATIONS_LOGS_CHANNEL_ID:
+        logs_channel = ctx.guild.get_channel(BCA_NOMINATIONS_LOGS_CHANNEL_ID)
+        if logs_channel:
+            embed = discord.Embed(
+                title="🏆 bCA nOMINATION lOG",
+                color=0xff69b4,
+                timestamp=datetime.now()
+            )
+            embed.add_field(name="Nominator", value=f"{ctx.author.mention}\n`{ctx.author.id}`", inline=True)
+            embed.add_field(name="Nominee", value=f"{nominee.mention}\n`{nominee.id}`", inline=True)
+            embed.add_field(name="Category", value=category.title(), inline=True)
+            embed.set_thumbnail(url=nominee.display_avatar.url)
+            
+            try:
+                await logs_channel.send(embed=embed)
+            except Exception as e:
+                print(f"Failed to send nomination log: {e}")
+    
+    # Ping nominee in nominations channel
+    if BCA_NOMINATIONS_CHANNEL_ID:
+        nominations_channel = ctx.guild.get_channel(BCA_NOMINATIONS_CHANNEL_ID)
+        if nominations_channel:
+            embed = discord.Embed(
+                title="🎆 nEW nOMINATION!",
+                description=f"{nominee.mention} hAS bEEN nOMINATED fOR **{category.title()}**!",
+                color=0xff69b4
+            )
+            embed.set_thumbnail(url=nominee.display_avatar.url)
+            
+            try:
+                await nominations_channel.send(embed=embed)
+            except Exception as e:
+                print(f"Failed to send nomination ping: {e}")
+
+# Voting System
+class VotingView(View):
+    def __init__(self, category, nominees):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.category = category
+        self.nominees = nominees
+        
+        # Add buttons for each nominee
+        for i, (nominee_id, nominee_name) in enumerate(nominees):
+            button = Button(
+                label=nominee_name[:80],  # Discord button label limit
+                style=discord.ButtonStyle.primary,
+                custom_id=f"vote_{category}_{nominee_id}"
+            )
+            button.callback = self.vote_callback
+            self.add_item(button)
+    
+    async def vote_callback(self, interaction):
+        custom_id = interaction.data['custom_id']
+        _, category, nominee_id = custom_id.split('_', 2)
+        
+        global BCA_VOTES
+        
+        # Check if user already voted in this category
+        if category not in BCA_VOTES:
+            BCA_VOTES[category] = {}
+        
+        if str(interaction.user.id) in BCA_VOTES[category]:
+            await interaction.response.send_message(embed=nova_embed("vOTE", f"yOU aLREADY vOTED iN '{category}'!\n\nOnly 1 vote per category per member."), ephemeral=True)
+            return
+        
+        # Add vote
+        BCA_VOTES[category][str(interaction.user.id)] = nominee_id
+        save_bca_votes(BCA_VOTES)
+        
+        nominee = interaction.guild.get_member(int(nominee_id))
+        nominee_name = nominee.display_name if nominee else "Unknown User"
+        
+        await interaction.response.send_message(embed=nova_embed("vOTE cAST", f"yOU vOTED fOR {nominee_name} iN '{category.title()}'!\n\n🗳️ aNONYMOUS vOTE cAST!"), ephemeral=True)
+        
+        # Log to voting logs channel (mods can see who voted for who)
+        if BCA_VOTING_LOGS_CHANNEL_ID:
+            logs_channel = interaction.guild.get_channel(BCA_VOTING_LOGS_CHANNEL_ID)
+            if logs_channel:
+                embed = discord.Embed(
+                    title="🗳️ bCA vOTE lOG",
+                    color=0xff69b4,
+                    timestamp=datetime.now()
+                )
+                embed.add_field(name="Voter", value=f"{interaction.user.mention}\n`{interaction.user.id}`", inline=True)
+                embed.add_field(name="Vote For", value=f"{nominee.mention if nominee else 'Unknown'}\n`{nominee_id}`", inline=True)
+                embed.add_field(name="Category", value=category.title(), inline=True)
+                
+                try:
+                    await logs_channel.send(embed=embed)
+                except Exception as e:
+                    print(f"Failed to send voting log: {e}")
+
+@bot.command()
+async def bcavote(ctx, *, category: str = None):
+    """Start a voting session for a BCA category (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("bCA vOTE", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    if not BCA_VOTING_CHANNEL_ID:
+        await ctx.send(embed=nova_embed("bCA vOTE", "nO vOTING cHANNEL sET! uSE ?setbcavoting #channel fIRST!"))
+        return
+    
+    if category is None:
+        await ctx.send(embed=nova_embed("bCA vOTE", "Usage: ?bcavote <category name>"))
+        return
+    
+    global BCA_CATEGORIES, BCA_NOMINATIONS
+    category = category.lower()
+    
+    if category not in BCA_CATEGORIES:
+        await ctx.send(embed=nova_embed("bCA vOTE", f"cATEGORY '{category}' dOESN'T eXIST!"))
+        return
+    
+    if category not in BCA_NOMINATIONS or not BCA_NOMINATIONS[category]:
+        await ctx.send(embed=nova_embed("bCA vOTE", f"nO nOMINATIONS fOR '{category}' yET!"))
+        return
+    
+    # Get unique nominees
+    nominees = set()
+    for nomination_data in BCA_NOMINATIONS[category].values():
+        nominees.add(nomination_data["nominee"])
+    
+    # Convert to list of (id, name) tuples
+    nominee_list = []
+    for nominee_id in nominees:
+        member = ctx.guild.get_member(int(nominee_id))
+        if member:
+            nominee_list.append((nominee_id, member.display_name))
+    
+    if not nominee_list:
+        await ctx.send(embed=nova_embed("bCA vOTE", f"nO vALID nOMINEES fOR '{category}'!"))
+        return
+    
+    if len(nominee_list) > 25:  # Discord button limit
+        await ctx.send(embed=nova_embed("bCA vOTE", f"tOO mANY nOMINEES ({len(nominee_list)})! mAXIMUM 25 aLLOWED."))
+        return
+    
+    # Create voting embed
+    embed = discord.Embed(
+        title=f"🗳️ vOTE fOR {category.title()}",
+        description=f"cLICK a bUTTON tO vOTE fOR yOUR fAVORITE iN '{category.title()}'!\n\n🔒 vOTING iS aNONYMOUS\n⚠️ oNLY 1 vOTE pER pERSON",
+        color=0xff69b4
+    )
+    
+    nominees_text = "\n".join([f"• {name}" for _, name in nominee_list])
+    embed.add_field(name="nOMINEES", value=nominees_text, inline=False)
+    
+    # Get the voting channel
+    voting_channel = ctx.guild.get_channel(BCA_VOTING_CHANNEL_ID)
+    if not voting_channel:
+        await ctx.send(embed=nova_embed("bCA vOTE", f"vOTING cHANNEL nOT fOUND! pLEASE rESET wITH ?setbcavoting #channel"))
+        return
+    
+    view = VotingView(category, nominee_list)
+    await voting_channel.send(embed=embed, view=view)
+    
+    # Confirm to mod in current channel
+    await ctx.send(embed=nova_embed("bCA vOTE", f"vOTING sESSION fOR '{category.title()}' sTARTED iN {voting_channel.mention}!"))
+
+# Countdown System
+@bot.command()
+async def addcountdown(ctx, event_name: str = None, end_time: str = None, *, description: str = None):
+    """Add a countdown for an event (mods only). Format: ?addcountdown "Event Name" "YYYY-MM-DD HH:MM" Description"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("aDD cOUNTDOWN", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    if not all([event_name, end_time, description]):
+        await ctx.send(embed=nova_embed("aDD cOUNTDOWN", 'Usage: ?addcountdown "Event Name" "YYYY-MM-DD HH:MM" Description\n\nExample: ?addcountdown "BCA Voting" "2024-12-31 23:59" Voting ends soon!'))
+        return
+    
+    try:
+        print(f"DEBUG: Adding countdown - Event: {event_name}, Time: {end_time}, Description: {description}")
+        
+        # Parse the datetime
+        end_datetime = datetime.strptime(end_time, "%Y-%m-%d %H:%M")
+        print(f"DEBUG: Parsed datetime: {end_datetime}")
+        
+        global BCA_COUNTDOWNS
+        BCA_COUNTDOWNS[event_name] = {
+            "end_time": end_datetime,
+            "description": description
+        }
+        
+        print(f"DEBUG: Saving countdown data: {BCA_COUNTDOWNS}")
+        save_bca_countdowns(BCA_COUNTDOWNS)
+        print("DEBUG: Countdown saved successfully")
+        
+        # Calculate time remaining
+        now = datetime.now()
+        time_diff = end_datetime - now
+        print(f"DEBUG: Time difference: {time_diff}")
+        
+        if time_diff.total_seconds() <= 0:
+            time_str = "eVENT hAS pASSED!"
+        else:
+            days = time_diff.days
+            hours, remainder = divmod(time_diff.seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+            time_str = f"{days}d {hours}h {minutes}m"
+        
+        embed = discord.Embed(
+            title="⏰ cOUNTDOWN aDDED",
+            description=f"**{event_name}**\n{description}\n\n⏱️ tIME rEMAINING: {time_str}",
+            color=0xff69b4
+        )
+        embed.set_footer(text=f"eNDS: {end_datetime.strftime('%Y-%m-%d at %H:%M')}")
+        await ctx.send(embed=embed)
+        
+    except ValueError as e:
+        print(f"DEBUG: ValueError in addcountdown: {e}")
+        await ctx.send(embed=nova_embed("aDD cOUNTDOWN", "iNVALID dATE fORMAT! uSE: YYYY-MM-DD HH:MM\n\nExample: 2024-12-31 23:59"))
+
+@bot.command()
+async def countdown(ctx, *, event_name: str = None):
+    """Show countdown for an event"""
+    global BCA_COUNTDOWNS
+    
+    print(f"DEBUG: Countdown command called with event_name: {event_name}")
+    print(f"DEBUG: Current BCA_COUNTDOWNS: {BCA_COUNTDOWNS}")
+    
+    if not BCA_COUNTDOWNS:
+        await ctx.send(embed=nova_embed("cOUNTDOWN", "nO cOUNTDOWNS sET uP yET!"))
+        return
+    
+    try:
+        if event_name is None:
+            # Show all countdowns
+            countdown_list = []
+            for event, data in BCA_COUNTDOWNS.items():
+                now = datetime.now()
+                time_diff = data["end_time"] - now
+                
+                if time_diff.total_seconds() <= 0:
+                    time_str = "eNDED"
+                else:
+                    days = time_diff.days
+                    hours, remainder = divmod(time_diff.seconds, 3600)
+                    minutes, _ = divmod(remainder, 60)
+                    time_str = f"{days}d {hours}h {minutes}m"
+                
+                countdown_list.append(f"**{event}** - {time_str}")
+            
+            embed = discord.Embed(
+                title="⏰ aLL cOUNTDOWNS",
+                description="\n".join(countdown_list),
+                color=0xff69b4
+            )
+            await ctx.send(embed=embed)
+        else:
+            # Show specific countdown
+            if event_name not in BCA_COUNTDOWNS:
+                available_events = list(BCA_COUNTDOWNS.keys())
+                await ctx.send(embed=nova_embed("cOUNTDOWN", f"eVENT '{event_name}' nOT fOUND!\n\naVAILABLE eVENTS: {', '.join(available_events) if available_events else 'None'}"))
+                return
+        
+        event_data = BCA_COUNTDOWNS[event_name]
+        now = datetime.now()
+        time_diff = event_data["end_time"] - now
+        
+        if time_diff.total_seconds() <= 0:
+            time_str = "eVENT hAS eNDED!"
+            color = 0x808080  # Gray for ended events
+        else:
+            days = time_diff.days
+            hours, remainder = divmod(time_diff.seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            time_str = f"{days} days, {hours} hours, {minutes} minutes, {seconds} seconds"
+            color = 0xff69b4
+        
+        embed = discord.Embed(
+            title=f"⏰ {event_name}",
+            description=f"{event_data['description']}\n\n⏱️ **tIME rEMAINING:** {time_str}",
+            color=color
+        )
+        embed.set_footer(text=f"eNDS: {event_data['end_time'].strftime('%Y-%m-%d at %H:%M')}")
+        await ctx.send(embed=embed)
+            
+    except Exception as e:
+        print(f"ERROR in countdown command: {e}")
+        await ctx.send(embed=nova_embed("cOUNTDOWN", "aN eRROR oCCURRED wHILE sHOWING cOUNTDOWN!"))
+
+# Member Count Command
+@bot.command()
+async def membercount(ctx):
+    """Show server member statistics"""
+    guild = ctx.guild
+    
+    total_members = guild.member_count
+    humans = sum(1 for member in guild.members if not member.bot)
+    bots = sum(1 for member in guild.members if member.bot)
+    
+    embed = discord.Embed(
+        title=f"📊 {guild.name} mEMBER cOUNT",
+        color=0xff69b4
+    )
+    
+    embed.add_field(name="👥 tOTAL mEMBERS", value=f"{total_members:,}", inline=True)
+    embed.add_field(name="👤 hUMANS", value=f"{humans:,}", inline=True)
+    embed.add_field(name="🤖 bOTS", value=f"{bots:,}", inline=True)
+    
+    # Add percentage breakdown
+    if total_members > 0:
+        human_percent = (humans / total_members) * 100
+        bot_percent = (bots / total_members) * 100
+        
+        embed.add_field(
+            name="📊 bREAKDOWN", 
+            value=f"hUMANS: {human_percent:.1f}%\nbOTS: {bot_percent:.1f}%", 
+            inline=False
+        )
+    
+    embed.set_thumbnail(url=guild.icon.url if guild.icon else None)
+    embed.set_footer(text=f"sERVER cREATED: {guild.created_at.strftime('%B %d, %Y')}")
+    
+    await ctx.send(embed=embed)
+
+# BCA Results Command
+@bot.command()
+async def bcaresults(ctx, *, category: str = None):
+    """Show BCA voting results for a category (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("bCA rESULTS", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    if category is None:
+        await ctx.send(embed=nova_embed("bCA rESULTS", "Usage: ?bcaresults <category name>"))
+        return
+    
+    global BCA_VOTES
+    category = category.lower()
+    
+    if category not in BCA_VOTES or not BCA_VOTES[category]:
+        await ctx.send(embed=nova_embed("bCA rESULTS", f"nO vOTES fOR '{category}' yET!"))
+        return
+    
+    # Count votes for each nominee
+    vote_counts = {}
+    for voter_id, nominee_id in BCA_VOTES[category].items():
+        if nominee_id not in vote_counts:
+            vote_counts[nominee_id] = 0
+        vote_counts[nominee_id] += 1
+    
+    # Sort by vote count (descending)
+    sorted_results = sorted(vote_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    # Create results embed
+    embed = discord.Embed(
+        title=f"🏆 bCA rESULTS: {category.title()}",
+        color=0xff69b4
+    )
+    
+    results_text = []
+    total_votes = sum(vote_counts.values())
+    
+    for i, (nominee_id, votes) in enumerate(sorted_results[:10]):  # Top 10
+        member = ctx.guild.get_member(int(nominee_id))
+        if member:
+            percentage = (votes / total_votes) * 100 if total_votes > 0 else 0
+            medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
+            results_text.append(f"{medal} **{member.display_name}** - {votes} votes ({percentage:.1f}%)")
+    
+    embed.description = "\n".join(results_text) if results_text else "nO rESULTS tO sHOW"
+    embed.set_footer(text=f"tOTAL vOTES: {total_votes}")
+    
+    await ctx.send(embed=embed)
+
+# =========================
+# BCA Slash Commands
+# =========================
+
+# BCA Setup Slash Commands
+@bot.tree.command(name="setbcanominations", description="Set the BCA nominations channel (mods only)")
+@app_commands.describe(channel="The channel for BCA nominations")
+async def slash_setbcanominations(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("sET bCA nOMINATIONS", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_NOMINATIONS_CHANNEL_ID
+    if channel is None:
+        BCA_NOMINATIONS_CHANNEL_ID = None
+        await interaction.response.send_message(embed=nova_embed("sET bCA nOMINATIONS", "bCA nOMINATIONS cHANNEL dISABLED!"))
+    else:
+        BCA_NOMINATIONS_CHANNEL_ID = channel.id
+        await interaction.response.send_message(embed=nova_embed("sET bCA nOMINATIONS", f"bCA nOMINATIONS cHANNEL sET tO {channel.mention}!"))
+    save_config()
+
+@bot.tree.command(name="setbcanominationslogs", description="Set the BCA nominations logs channel (mods only)")
+@app_commands.describe(channel="The channel for BCA nomination logs")
+async def slash_setbcanominationslogs(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("sET bCA nOM lOGS", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_NOMINATIONS_LOGS_CHANNEL_ID
+    if channel is None:
+        BCA_NOMINATIONS_LOGS_CHANNEL_ID = None
+        await interaction.response.send_message(embed=nova_embed("sET bCA nOM lOGS", "bCA nOMINATIONS lOGS cHANNEL dISABLED!"))
+    else:
+        BCA_NOMINATIONS_LOGS_CHANNEL_ID = channel.id
+        await interaction.response.send_message(embed=nova_embed("sET bCA nOM lOGS", f"bCA nOMINATIONS lOGS cHANNEL sET tO {channel.mention}!"))
+    save_config()
+
+@bot.tree.command(name="setbcavoting", description="Set the BCA voting channel (mods only)")
+@app_commands.describe(channel="The channel for BCA voting")
+async def slash_setbcavoting(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("sET bCA vOTING", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_VOTING_CHANNEL_ID
+    if channel is None:
+        BCA_VOTING_CHANNEL_ID = None
+        await interaction.response.send_message(embed=nova_embed("sET bCA vOTING", "bCA vOTING cHANNEL dISABLED!"))
+    else:
+        BCA_VOTING_CHANNEL_ID = channel.id
+        await interaction.response.send_message(embed=nova_embed("sET bCA vOTING", f"bCA vOTING cHANNEL sET tO {channel.mention}!"))
+    save_config()
+
+@bot.tree.command(name="setbcavotinglogs", description="Set the BCA voting logs channel (mods only)")
+@app_commands.describe(channel="The channel for BCA voting logs")
+async def slash_setbcavotinglogs(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("sET bCA vOTING lOGS", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_VOTING_LOGS_CHANNEL_ID
+    if channel is None:
+        BCA_VOTING_LOGS_CHANNEL_ID = None
+        await interaction.response.send_message(embed=nova_embed("sET bCA vOTING lOGS", "bCA vOTING lOGS cHANNEL dISABLED!"))
+    else:
+        BCA_VOTING_LOGS_CHANNEL_ID = channel.id
+        await interaction.response.send_message(embed=nova_embed("sET bCA vOTING lOGS", f"bCA vOTING lOGS cHANNEL sET tO {channel.mention}!"))
+    save_config()
+
+# BCA Deadline Slash Commands
+@bot.tree.command(name="setbcanomdeadline", description="Set nomination deadline (mods only). Format: YYYY-MM-DD HH:MM EST")
+@app_commands.describe(end_time="Deadline in format: YYYY-MM-DD HH:MM (EST timezone)")
+async def slash_setbcanomdeadline(interaction: discord.Interaction, end_time: str = None):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("sET nOM dEADLINE", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_NOMINATION_DEADLINE
+    
+    if end_time is None:
+        BCA_NOMINATION_DEADLINE = None
+        await interaction.response.send_message(embed=nova_embed("sET nOM dEADLINE", "nOMINATION dEADLINE rEMOVED!"))
+    else:
+        try:
+            # Parse time as EST
+            est = pytz.timezone('US/Eastern')
+            naive_datetime = datetime.strptime(end_time, "%Y-%m-%d %H:%M")
+            est_datetime = est.localize(naive_datetime)
+            # Convert to UTC for storage
+            utc_datetime = est_datetime.astimezone(pytz.UTC)
+            BCA_NOMINATION_DEADLINE = utc_datetime
+            
+            # Show confirmation in EST
+            await interaction.response.send_message(embed=nova_embed("sET nOM dEADLINE", f"nOMINATION dEADLINE sET tO:\n{est_datetime.strftime('%Y-%m-%d at %H:%M EST')}"))
+        except ValueError:
+            await interaction.response.send_message(embed=nova_embed("sET nOM dEADLINE", "iNVALID dATE fORMAT! uSE: YYYY-MM-DD HH:MM (EST)\n\nExample: 2024-12-31 23:59"), ephemeral=True)
+            return
+    
+    # Reset announcement tracker when deadline changes
+    reset_announcement_tracker()
+    save_config()
+
+@bot.tree.command(name="setbcavotedeadline", description="Set voting deadline (mods only). Format: YYYY-MM-DD HH:MM EST")
+@app_commands.describe(end_time="Deadline in format: YYYY-MM-DD HH:MM (EST timezone)")
+async def slash_setbcavotedeadline(interaction: discord.Interaction, end_time: str = None):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("sET vOTE dEADLINE", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_VOTING_DEADLINE
+    
+    if end_time is None:
+        BCA_VOTING_DEADLINE = None
+        await interaction.response.send_message(embed=nova_embed("sET vOTE dEADLINE", "vOTING dEADLINE rEMOVED!"))
+    else:
+        try:
+            # Parse time as EST
+            est = pytz.timezone('US/Eastern')
+            naive_datetime = datetime.strptime(end_time, "%Y-%m-%d %H:%M")
+            est_datetime = est.localize(naive_datetime)
+            # Convert to UTC for storage
+            utc_datetime = est_datetime.astimezone(pytz.UTC)
+            BCA_VOTING_DEADLINE = utc_datetime
+            
+            # Show confirmation in EST
+            await interaction.response.send_message(embed=nova_embed("sET vOTE dEADLINE", f"vOTING dEADLINE sET tO:\n{est_datetime.strftime('%Y-%m-%d at %H:%M EST')}"))
+        except ValueError:
+            await interaction.response.send_message(embed=nova_embed("sET vOTE dEADLINE", "iNVALID dATE fORMAT! uSE: YYYY-MM-DD HH:MM (EST)\n\nExample: 2024-12-31 23:59"), ephemeral=True)
+            return
+    
+    # Reset announcement tracker when deadline changes
+    reset_announcement_tracker()
+    save_config()
+
+@bot.tree.command(name="bcadeadlines", description="Show current BCA deadlines")
+async def slash_bcadeadlines(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="⏰ bCA dEADLINES",
+        color=0xff69b4,
+        timestamp=datetime.now()
+    )
+    
+    if BCA_NOMINATION_DEADLINE:
+        # Convert UTC deadline to EST for display
+        est = pytz.timezone('US/Eastern')
+        now_utc = datetime.now(pytz.UTC)
+        deadline_est = BCA_NOMINATION_DEADLINE.astimezone(est)
+        
+        time_diff = BCA_NOMINATION_DEADLINE - now_utc
+        if time_diff.total_seconds() <= 0:
+            nom_status = "cLOSED"
+        else:
+            days = time_diff.days
+            hours, remainder = divmod(time_diff.seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+            nom_status = f"{days}d {hours}h {minutes}m remaining"
+        
+        embed.add_field(
+            name="📝 nOMINATIONS",
+            value=f"**Deadline:** {deadline_est.strftime('%Y-%m-%d at %H:%M EST')}\n**Status:** {nom_status}",
+            inline=False
+        )
+    else:
+        embed.add_field(name="📝 nOMINATIONS", value="nO dEADLINE sET", inline=False)
+    
+    if BCA_VOTING_DEADLINE:
+        # Convert UTC deadline to EST for display
+        est = pytz.timezone('US/Eastern')
+        now_utc = datetime.now(pytz.UTC)
+        deadline_est = BCA_VOTING_DEADLINE.astimezone(est)
+        
+        time_diff = BCA_VOTING_DEADLINE - now_utc
+        if time_diff.total_seconds() <= 0:
+            vote_status = "cLOSED"
+        else:
+            days = time_diff.days
+            hours, remainder = divmod(time_diff.seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+            vote_status = f"{days}d {hours}h {minutes}m remaining"
+        
+        embed.add_field(
+            name="🗳️ vOTING",
+            value=f"**Deadline:** {deadline_est.strftime('%Y-%m-%d at %H:%M EST')}\n**Status:** {vote_status}",
+            inline=False
+        )
+    else:
+        embed.add_field(name="🗳️ vOTING", value="nO dEADLINE sET", inline=False)
+    
+    await interaction.response.send_message(embed=embed)
+
+# BCA Category Management Slash Commands
+@bot.tree.command(name="bcaaddcategory", description="Add a BCA category (mods only)")
+@app_commands.describe(category_name="Name of the category to add")
+async def slash_bcaaddcategory(interaction: discord.Interaction, category_name: str):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("bCA aDD cATEGORY", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_CATEGORIES
+    category_name = category_name.lower()
+    
+    if category_name in BCA_CATEGORIES:
+        await interaction.response.send_message(embed=nova_embed("bCA aDD cATEGORY", f"cATEGORY '{category_name}' aLREADY eXISTS!"), ephemeral=True)
+        return
+    
+    BCA_CATEGORIES[category_name] = {"allow_self_nomination": False}
+    save_bca_categories(BCA_CATEGORIES)
+    
+    await interaction.response.send_message(embed=nova_embed("bCA aDD cATEGORY", f"aDDED cATEGORY: {category_name}\n\nsELF-nOMINATION: dISABLED"))
+
+@bot.tree.command(name="bcatoggleself", description="Toggle self-nomination for a BCA category (mods only)")
+@app_commands.describe(category_name="Name of the category to toggle")
+async def slash_bcatoggleself(interaction: discord.Interaction, category_name: str):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("bCA tOGGLE sELF", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_CATEGORIES
+    category_name = category_name.lower()
+    
+    if category_name not in BCA_CATEGORIES:
+        await interaction.response.send_message(embed=nova_embed("bCA tOGGLE sELF", f"cATEGORY '{category_name}' dOESN'T eXIST!"), ephemeral=True)
+        return
+    
+    BCA_CATEGORIES[category_name]["allow_self_nomination"] = not BCA_CATEGORIES[category_name]["allow_self_nomination"]
+    save_bca_categories(BCA_CATEGORIES)
+    
+    status = "eNABLED" if BCA_CATEGORIES[category_name]["allow_self_nomination"] else "dISABLED"
+    await interaction.response.send_message(embed=nova_embed("bCA tOGGLE sELF", f"sELF-nOMINATION fOR '{category_name}': {status}"))
+
+@bot.tree.command(name="bcacategories", description="List all BCA categories")
+async def slash_bcacategories(interaction: discord.Interaction):
+    global BCA_CATEGORIES
+    
+    if not BCA_CATEGORIES:
+        await interaction.response.send_message(embed=nova_embed("bCA cATEGORIES", "nO cATEGORIES sET uP yET!"))
+        return
+    
+    category_list = []
+    for category, settings in BCA_CATEGORIES.items():
+        self_nom = "✅" if settings["allow_self_nomination"] else "❌"
+        category_list.append(f"**{category.title()}** - Self-nomination: {self_nom}")
+    
+    embed = discord.Embed(
+        title="🏆 bCA cATEGORIES",
+        description="\n".join(category_list),
+        color=0xff69b4
+    )
+    await interaction.response.send_message(embed=embed)
+
+# BCA Reset Slash Commands
+@bot.tree.command(name="resetnominations", description="Reset nominations for a category or all categories (mods only)")
+@app_commands.describe(category="Category to reset (leave empty to reset all)")
+async def slash_resetnominations(interaction: discord.Interaction, category: str = None):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("rESET nOMINATIONS", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_NOMINATIONS
+    
+    if category is None:
+        # Reset all nominations
+        BCA_NOMINATIONS = {}
+        save_bca_nominations(BCA_NOMINATIONS)
+        await interaction.response.send_message(embed=nova_embed("rESET nOMINATIONS", "🗑️ aLL nOMINATIONS hAVE bEEN rESET!"))
+    else:
+        category = category.lower()
+        if category not in BCA_CATEGORIES:
+            await interaction.response.send_message(embed=nova_embed("rESET nOMINATIONS", f"cATEGORY '{category}' dOESN'T eXIST!"), ephemeral=True)
+            return
+        
+        # Reset nominations for specific category
+        if category in BCA_NOMINATIONS:
+            del BCA_NOMINATIONS[category]
+            save_bca_nominations(BCA_NOMINATIONS)
+            await interaction.response.send_message(embed=nova_embed("rESET nOMINATIONS", f"🗑️ nOMINATIONS fOR '{category.title()}' hAVE bEEN rESET!"))
+        else:
+            await interaction.response.send_message(embed=nova_embed("rESET nOMINATIONS", f"nO nOMINATIONS fOUND fOR '{category.title()}'!"))
+
+@bot.tree.command(name="resetvotes", description="Reset votes for a category or all categories (mods only)")
+@app_commands.describe(category="Category to reset (leave empty to reset all)")
+async def slash_resetvotes(interaction: discord.Interaction, category: str = None):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("rESET vOTES", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_VOTES
+    
+    if category is None:
+        # Reset all votes
+        BCA_VOTES = {}
+        save_bca_votes(BCA_VOTES)
+        await interaction.response.send_message(embed=nova_embed("rESET vOTES", "🗑️ aLL vOTES hAVE bEEN rESET!"))
+    else:
+        category = category.lower()
+        if category not in BCA_CATEGORIES:
+            await interaction.response.send_message(embed=nova_embed("rESET vOTES", f"cATEGORY '{category}' dOESN'T eXIST!"), ephemeral=True)
+            return
+        
+        # Reset votes for specific category
+        if category in BCA_VOTES:
+            del BCA_VOTES[category]
+            save_bca_votes(BCA_VOTES)
+            await interaction.response.send_message(embed=nova_embed("rESET vOTES", f"🗑️ vOTES fOR '{category.title()}' hAVE bEEN rESET!"))
+        else:
+            await interaction.response.send_message(embed=nova_embed("rESET vOTES", f"nO vOTES fOUND fOR '{category.title()}'!"))
+
+# BCA Overview Slash Commands
+@bot.tree.command(name="bcanominations", description="Show all current nominations across all categories (mods only)")
+async def slash_bcanominations(interaction: discord.Interaction):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("bCA nOMINATIONS", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_CATEGORIES, BCA_NOMINATIONS
+    
+    if not BCA_CATEGORIES:
+        await interaction.response.send_message(embed=nova_embed("bCA nOMINATIONS", "nO cATEGORIES sET uP yET!"))
+        return
+    
+    embed = discord.Embed(
+        title="🏆 bCA nOMINATIONS oVERVIEW",
+        color=0xff69b4
+    )
+    
+    total_nominations = 0
+    categories_with_noms = 0
+    
+    for category in BCA_CATEGORIES.keys():
+        if category in BCA_NOMINATIONS and BCA_NOMINATIONS[category]:
+            # Count nominations for this category
+            nominee_counts = {}
+            for nominator_id, nomination_data in BCA_NOMINATIONS[category].items():
+                nominee_id = nomination_data['nominee']
+                if nominee_id not in nominee_counts:
+                    nominee_counts[nominee_id] = 0
+                nominee_counts[nominee_id] += 1
+            
+            # Sort by nomination count (descending)
+            sorted_nominees = sorted(nominee_counts.items(), key=lambda x: x[1], reverse=True)
+            
+            # Build category text
+            category_text = []
+            for nominee_id, count in sorted_nominees:
+                member = interaction.guild.get_member(int(nominee_id))
+                if member:
+                    plural = "person" if count == 1 else "people"
+                    category_text.append(f"• {member.mention} (nominated by {count} {plural})")
+            
+            if category_text:
+                nom_count = len(BCA_NOMINATIONS[category])
+                embed.add_field(
+                    name=f"📝 {category.title()} ({nom_count} nominations)",
+                    value="\n".join(category_text),
+                    inline=False
+                )
+                total_nominations += nom_count
+                categories_with_noms += 1
+        else:
+            # No nominations for this category
+            embed.add_field(
+                name=f"📝 {category.title()} (0 nominations)",
+                value="• nO nOMINATIONS yET",
+                inline=False
+            )
+    
+    # Add summary footer
+    if total_nominations > 0:
+        embed.set_footer(text=f"tOTAL: {total_nominations} nominations across {categories_with_noms}/{len(BCA_CATEGORIES)} categories")
+    else:
+        embed.set_footer(text="nO nOMINATIONS yET")
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="bcaresults", description="Show BCA voting results for a category (mods only)")
+@app_commands.describe(category="Category to show results for")
+async def slash_bcaresults(interaction: discord.Interaction, category: str):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("bCA rESULTS", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_VOTES
+    category = category.lower()
+    
+    if category not in BCA_VOTES or not BCA_VOTES[category]:
+        await interaction.response.send_message(embed=nova_embed("bCA rESULTS", f"nO vOTES fOR '{category}' yET!"))
+        return
+    
+    # Count votes for each nominee
+    vote_counts = {}
+    for voter_id, nominee_id in BCA_VOTES[category].items():
+        if nominee_id not in vote_counts:
+            vote_counts[nominee_id] = 0
+        vote_counts[nominee_id] += 1
+    
+    # Sort by vote count (descending)
+    sorted_results = sorted(vote_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    # Create results embed
+    embed = discord.Embed(
+        title=f"🏆 bCA rESULTS: {category.title()}",
+        color=0xff69b4
+    )
+    
+    results_text = []
+    total_votes = sum(vote_counts.values())
+    
+    for i, (nominee_id, votes) in enumerate(sorted_results[:10]):  # Top 10
+        member = interaction.guild.get_member(int(nominee_id))
+        if member:
+            percentage = (votes / total_votes) * 100 if total_votes > 0 else 0
+            medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
+            results_text.append(f"{medal} **{member.display_name}** - {votes} votes ({percentage:.1f}%)")
+    
+    embed.description = "\n".join(results_text) if results_text else "nO rESULTS tO sHOW"
+    embed.set_footer(text=f"tOTAL vOTES: {total_votes}")
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="membercount", description="Show server member count breakdown")
+async def slash_membercount(interaction: discord.Interaction):
+    guild = interaction.guild
+    total_members = guild.member_count
+    
+    # Count humans vs bots
+    humans = sum(1 for member in guild.members if not member.bot)
+    bots = total_members - humans
+    
+    # Calculate percentages
+    human_percent = (humans / total_members) * 100 if total_members > 0 else 0
+    bot_percent = (bots / total_members) * 100 if total_members > 0 else 0
+    
+    embed = discord.Embed(
+        title="👥 mEMBER cOUNT",
+        color=0xff69b4
+    )
+    
+    embed.add_field(
+        name="📊 tOTAL mEMBERS", 
+        value=f"**{total_members:,}** members", 
+        inline=False
+    )
+    embed.add_field(
+        name="👤 hUMANS", 
+        value=f"**{humans:,}** humans", 
+        inline=True
+    )
+    embed.add_field(
+        name="🤖 bOTS", 
+        value=f"**{bots:,}** bots", 
+        inline=True
+    )
+    embed.add_field(
+        name="📊 bREAKDOWN", 
+        value=f"hUMANS: {human_percent:.1f}%\nbOTS: {bot_percent:.1f}%", 
+        inline=False
+    )
+    
+    embed.set_thumbnail(url=guild.icon.url if guild.icon else None)
+    embed.set_footer(text=f"sERVER cREATED: {guild.created_at.strftime('%B %d, %Y')}")
+    
+    await interaction.response.send_message(embed=embed)
+
+# =========================
+# Background Task System for Deadline Monitoring
+# =========================
+
+# Track which announcements have been sent to avoid duplicates
+announcement_tracker = {
+    'nomination_1h_warning': False,
+    'nomination_closed': False,
+    'voting_1h_warning': False,
+    'voting_closed': False,
+    'voting_opened': False
+}
+
+@bot.event
+async def on_ready():
+    print(f'{bot.user} has connected to Discord!')
+    # Start the deadline monitoring task
+    deadline_monitor.start()
+
+from discord.ext import tasks
+
+@tasks.loop(minutes=5)  # Check every 5 minutes
+async def deadline_monitor():
+    """Monitor deadlines and send automatic announcements"""
+    try:
+        global BCA_NOMINATION_DEADLINE, BCA_VOTING_DEADLINE, announcement_tracker
+        
+        # Get current time in UTC
+        now_utc = datetime.now(pytz.UTC)
+        est = pytz.timezone('US/Eastern')
+        
+        # Find announcement channels
+        nomination_channel = None
+        if BCA_NOMINATIONS_CHANNEL_ID:
+            nomination_channel = bot.get_channel(BCA_NOMINATIONS_CHANNEL_ID)
+        
+        # === NOMINATION DEADLINE MONITORING ===
+        if BCA_NOMINATION_DEADLINE:
+            time_until_nom_deadline = BCA_NOMINATION_DEADLINE - now_utc
+            
+            # 1 hour warning for nominations
+            if (3540 <= time_until_nom_deadline.total_seconds() <= 3660 and 
+                not announcement_tracker['nomination_1h_warning']):
+                
+                if nomination_channel:
+                    deadline_est = BCA_NOMINATION_DEADLINE.astimezone(est)
+                    embed = discord.Embed(
+                        title="⚠️ nOMINATION dEADLINE wARNING!",
+                        description=f"⏰ **1 hOUR lEFT tO nOMINATE!**\n\nDeadline: {deadline_est.strftime('%Y-%m-%d at %H:%M EST')}\n\nUse `?nominate @user <category>` to submit your nominations!",
+                        color=0xffaa00
+                    )
+                    await nomination_channel.send(embed=embed)
+                    announcement_tracker['nomination_1h_warning'] = True
+            
+            # Nominations closed announcement
+            elif (time_until_nom_deadline.total_seconds() <= 0 and 
+                  not announcement_tracker['nomination_closed']):
+                
+                if nomination_channel:
+                    embed = discord.Embed(
+                        title="📝 nOMINATIONS cLOSED!",
+                        description="📝 **nOMINATIONS fOR aLL cATEGORIES hAVE cLOSED!**\n\n🗳️ vOTING wILL oPEN sOON!",
+                        color=0xff0000
+                    )
+                    await nomination_channel.send(embed=embed)
+                    announcement_tracker['nomination_closed'] = True
+                    announcement_tracker['voting_opened'] = False  # Reset for voting announcement
+        
+        # === VOTING DEADLINE MONITORING ===
+        if BCA_VOTING_DEADLINE:
+            time_until_vote_deadline = BCA_VOTING_DEADLINE - now_utc
+            
+            # 1 hour warning for voting
+            if (3540 <= time_until_vote_deadline.total_seconds() <= 3660 and 
+                not announcement_tracker['voting_1h_warning']):
+                
+                voting_channel = bot.get_channel(BCA_VOTING_CHANNEL_ID) if BCA_VOTING_CHANNEL_ID else nomination_channel
+                if voting_channel:
+                    deadline_est = BCA_VOTING_DEADLINE.astimezone(est)
+                    embed = discord.Embed(
+                        title="⚠️ vOTING dEADLINE wARNING!",
+                        description=f"⏰ **1 hOUR lEFT tO vOTE!**\n\nDeadline: {deadline_est.strftime('%Y-%m-%d at %H:%M EST')}\n\nMods can use `?bcavote <category>` to create voting sessions!",
+                        color=0xffaa00
+                    )
+                    await voting_channel.send(embed=embed)
+                    announcement_tracker['voting_1h_warning'] = True
+            
+            # Voting closed announcement
+            elif (time_until_vote_deadline.total_seconds() <= 0 and 
+                  not announcement_tracker['voting_closed']):
+                
+                voting_channel = bot.get_channel(BCA_VOTING_CHANNEL_ID) if BCA_VOTING_CHANNEL_ID else nomination_channel
+                if voting_channel:
+                    embed = discord.Embed(
+                        title="🗳️ vOTING cLOSED!",
+                        description="🗳️ **vOTING fOR aLL cATEGORIES hAS cLOSED!**\n\n🏆 rESULTS wILL bE aNNOUNCED sOON!",
+                        color=0xff0000
+                    )
+                    await voting_channel.send(embed=embed)
+                    announcement_tracker['voting_closed'] = True
+        
+        # === VOTING OPENED ANNOUNCEMENT ===
+        # Announce when nominations are closed but voting hasn't started yet
+        if (BCA_NOMINATION_DEADLINE and BCA_VOTING_DEADLINE and 
+            now_utc > BCA_NOMINATION_DEADLINE and now_utc < BCA_VOTING_DEADLINE and 
+            not announcement_tracker['voting_opened']):
+            
+            voting_channel = bot.get_channel(BCA_VOTING_CHANNEL_ID) if BCA_VOTING_CHANNEL_ID else nomination_channel
+            if voting_channel:
+                vote_deadline_est = BCA_VOTING_DEADLINE.astimezone(est)
+                embed = discord.Embed(
+                    title="🗳️ vOTING iS nOW oPEN!",
+                    description=f"🗳️ **vOTING iS nOW oPEN!**\n\nVoting deadline: {vote_deadline_est.strftime('%Y-%m-%d at %H:%M EST')}\n\nMods can use `?bcavote <category>` to create voting sessions!",
+                    color=0x00ff00
+                )
+                await voting_channel.send(embed=embed)
+                announcement_tracker['voting_opened'] = True
+    
+    except Exception as e:
+        print(f"Error in deadline_monitor: {e}")
+        import traceback
+        traceback.print_exc()
+
+# Reset announcement tracker when deadlines are changed
+def reset_announcement_tracker():
+    """Reset announcement tracker when deadlines change"""
+    global announcement_tracker
+    announcement_tracker = {
+        'nomination_1h_warning': False,
+        'nomination_closed': False,
+        'voting_1h_warning': False,
+        'voting_closed': False,
+        'voting_opened': False
+    }
 
 bot.run(TOKEN)
