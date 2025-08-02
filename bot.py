@@ -58,7 +58,7 @@ daily_cooldowns = {}
 OWNER_ID = 755846396208218174
 
 # Server restriction - Set to your server ID
-ALLOWED_SERVER_ID = 1390109232677785674  # Your server ID
+ALLOWED_SERVER_ID = None  # Allow bot to work in any server
 
 ROLE_MESSAGE_ID = None
 EMOJI_TO_ROLE = {
@@ -379,13 +379,44 @@ def get_level(user_id):
     return user_xp.get(str(user_id), {"xp": 0, "level": 1})
 
 def has_mod_or_admin(ctx):
-    """Check if the user has mod or admin privileges or is the owner."""
+    """Check if the user has mod or admin privileges, is the bot owner, or is the server owner."""
+    print(f"\n=== PERMISSION DEBUG ===")
+    print(f"User: {ctx.author} (ID: {ctx.author.id})")
+    print(f"Guild: {ctx.guild.name if ctx.guild else 'None'} (ID: {ctx.guild.id if ctx.guild else 'None'})")
+    print(f"Guild Owner ID: {ctx.guild.owner_id if ctx.guild else 'None'}")
+    print(f"Bot Owner ID: {OWNER_ID}")
+    print(f"User has admin perms: {ctx.author.guild_permissions.administrator if ctx.guild else 'No guild'}")
+    
+    # Check if user is the bot owner
     if ctx.author.id == OWNER_ID:
+        print(f"✅ User is bot owner")
         return True
+    
+    # Check if user is the server owner
+    if ctx.guild and ctx.author.id == ctx.guild.owner_id:
+        print(f"✅ User is server owner")
+        return True
+    
+    # Check if user has administrator permissions
+    if ctx.author.guild_permissions.administrator:
+        print(f"✅ User has administrator permissions")
+        return True
+    
+    # Check for specific mod/admin roles
     mod_role_id = config.get("mod_role_id")
     admin_role_id = config.get("admin_role_id")
     user_role_ids = [role.id for role in ctx.author.roles]
-    return (mod_role_id and mod_role_id in user_role_ids) or (admin_role_id and admin_role_id in user_role_ids)
+    
+    print(f"Config mod_role_id: {mod_role_id}")
+    print(f"Config admin_role_id: {admin_role_id}")
+    print(f"User role IDs: {user_role_ids}")
+    
+    has_role = (mod_role_id and mod_role_id in user_role_ids) or (admin_role_id and admin_role_id in user_role_ids)
+    print(f"Has mod/admin role: {has_role}")
+    print(f"❌ Permission denied")
+    print(f"========================\n")
+    
+    return has_role
 
 def load_birthdays():
     try:
@@ -1001,9 +1032,12 @@ async def impregnate(ctx, partner: discord.Member):
 
 @bot.command()
 async def nuke(ctx):
+    print(f"\n🔥 NUKE COMMAND RECEIVED from {ctx.author} in {ctx.guild.name if ctx.guild else 'DM'}")
     if not has_mod_or_admin(ctx):
+        print(f"❌ Permission check failed for {ctx.author}")
         await ctx.send("You don't have permission to use this command.")
         return
+    print(f"✅ Permission check passed for {ctx.author}")
     await ctx.channel.purge(limit=1000)
     await ctx.send("boom")
     # Log the mod action
@@ -5502,12 +5536,19 @@ async def clearcase_slash(interaction: discord.Interaction, member: discord.Memb
 
 # Helper function for slash command permission checking
 def has_mod_or_admin_interaction(interaction):
-    """Check if the user has mod or admin privileges for slash commands"""
+    """Check if the user has mod or admin privileges, is the bot owner, or is the server owner for slash commands"""
+    # Check if user is the bot owner
     if interaction.user.id == OWNER_ID:
         return True
-    
-    mod_role_id = config.get('MOD_ROLE_ID')
-    admin_role_id = config.get('ADMIN_ROLE_ID')
+    # Check if user is the server owner
+    if interaction.guild and interaction.user.id == interaction.guild.owner_id:
+        return True
+    # Check if user has administrator permissions
+    if interaction.user.guild_permissions.administrator:
+        return True
+    # Check for specific mod/admin roles
+    mod_role_id = config.get('mod_role_id')
+    admin_role_id = config.get('admin_role_id')
     
     user_role_ids = [role.id for role in interaction.user.roles]
     
