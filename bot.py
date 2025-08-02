@@ -1044,9 +1044,12 @@ async def nuke(ctx):
     await log_mod_action(ctx.guild, "nuke", ctx.author, None, f"Nuked all messages in {ctx.channel.mention}")
 
 @bot.command()
-async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
+async def kick(ctx, member: discord.Member = None, *, reason="No reason provided"):
     if not has_mod_or_admin(ctx):
         await ctx.send("You don't have permission to use this command.")
+        return
+    if member is None:
+        await ctx.send("Usage: ?kick @user [reason] - Kicks a member from the server. Only mods/admins can use this.")
         return
     try:
         await member.kick(reason=reason)
