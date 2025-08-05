@@ -1,8 +1,5 @@
 {
-  "funniest barb": {
-    "allow_self_nomination": false
-  },
-  "best editor": {
+  "test": {
     "allow_self_nomination": true
   }
 }
