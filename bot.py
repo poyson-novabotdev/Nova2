@@ -27,6 +27,11 @@ intents.members = True
 intents.presences = True
 intents.guilds = True
 
+# Load config first to get the prefix
+load_dotenv()
+
+# We need to initialize the bot early to avoid decorator issues
+# We'll set the proper prefix after loading config
 bot = commands.Bot(command_prefix="?", intents=intents, help_command=None)
 
 # =========================
@@ -42,6 +47,7 @@ REMINDERS_FILE = "reminders.json"
 THRIFT_FILE = "thrift.json"
 AFK_FILE = "afk.json"
 PROFILES_FILE = "profiles.json"
+MESSAGE_ACTIVITY_FILE = "message_activity.json"
 BCA_NOMINATIONS_FILE = "bca_nominations.json"
 BCA_VOTES_FILE = "bca_votes.json"
 BCA_CATEGORIES_FILE = "bca_categories.json"
@@ -50,6 +56,20 @@ BCA_COUNTDOWNS_FILE = "bca_countdowns.json"
 balances = {}
 user_xp = {}
 config = {}
+
+# Per-server prefixes - loaded from config, defaults to "?"
+SERVER_PREFIXES = {}  # guild_id: prefix
+DEFAULT_PREFIX = "?"
+
+# Dynamic prefix function
+def get_prefix(bot, message):
+    """Get the prefix for the current server."""
+    if message.guild is None:
+        # DMs use default prefix
+        return DEFAULT_PREFIX
+    
+    # Return server-specific prefix or default
+    return SERVER_PREFIXES.get(message.guild.id, DEFAULT_PREFIX)
 
 beg_cooldowns = {}
 work_cooldowns = {}
@@ -77,6 +97,9 @@ AUTO_REACTIONS = {}  # trigger_word: emoji
 
 # Command disabling system
 DISABLED_COMMANDS = set()  # Set of disabled command names
+
+# Message activity tracking system
+MESSAGE_ACTIVITY = {}  # guild_id: {user_id: [{"timestamp": datetime, "count": int}]}
 
 # Runway system
 RUNWAY_CHANNEL_ID = None  # Set this to your runway channel ID
@@ -265,10 +288,13 @@ INTERNATIONAL_DAYS = {
 
 def load_config():
     """Load configuration from CONFIG_FILE into the global config dict."""
-    global config, CHAT_LOGS_CHANNEL_ID, RULES_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID, BCA_NOMINATIONS_CHANNEL_ID, BCA_NOMINATIONS_LOGS_CHANNEL_ID, BCA_VOTING_CHANNEL_ID, BCA_VOTING_LOGS_CHANNEL_ID, BCA_CATEGORIES, BCA_NOMINATIONS, BCA_VOTES, BCA_COUNTDOWNS, BCA_NOMINATION_DEADLINE, BCA_VOTING_DEADLINE, CENTRAL_LOG_GUILD_ID, CENTRAL_OVERVIEW_CHANNEL_ID, CENTRAL_ARCHIVE_CATEGORY_ID
+    global config, SERVER_PREFIXES, CHAT_LOGS_CHANNEL_ID, RULES_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID, BCA_NOMINATIONS_CHANNEL_ID, BCA_NOMINATIONS_LOGS_CHANNEL_ID, BCA_VOTING_CHANNEL_ID, BCA_VOTING_LOGS_CHANNEL_ID, BCA_CATEGORIES, BCA_NOMINATIONS, BCA_VOTES, BCA_COUNTDOWNS, BCA_NOMINATION_DEADLINE, BCA_VOTING_DEADLINE, CENTRAL_LOG_GUILD_ID, CENTRAL_OVERVIEW_CHANNEL_ID, CENTRAL_ARCHIVE_CATEGORY_ID
     try:
         with open(CONFIG_FILE, "r") as f:
             config = json.load(f)
+            # Load server prefixes (convert string keys to int)
+            prefix_data = config.get("server_prefixes", {})
+            SERVER_PREFIXES = {int(guild_id): prefix for guild_id, prefix in prefix_data.items()}
             CHAT_LOGS_CHANNEL_ID = config.get("chat_logs_channel_id")
             RULES_CHANNEL_ID = config.get("rules_channel_id")
             WELCOME_CHANNEL_ID = config.get("welcome_channel_id")
@@ -297,7 +323,8 @@ def load_config():
             BCA_NOMINATION_DEADLINE = datetime.fromisoformat(config.get("bca_nomination_deadline")) if config.get("bca_nomination_deadline") else None
             BCA_VOTING_DEADLINE = datetime.fromisoformat(config.get("bca_voting_deadline")) if config.get("bca_voting_deadline") else None
     except FileNotFoundError:
-        config = {"mod_role_id": None, "admin_role_id": None, "chat_logs_channel_id": None, "rules_channel_id": None, "welcome_channel_id": None, "farewell_channel_id": None, "runway_channel_id": None, "ticket_category_id": None, "support_role_id": None, "ticket_logs_channel_id": None, "join_leave_logs_channel_id": None, "server_logs_channel_id": None, "mod_logs_channel_id": None}
+        config = {"mod_role_id": None, "admin_role_id": None, "server_prefixes": {}, "chat_logs_channel_id": None, "rules_channel_id": None, "welcome_channel_id": None, "farewell_channel_id": None, "runway_channel_id": None, "ticket_category_id": None, "support_role_id": None, "ticket_logs_channel_id": None, "join_leave_logs_channel_id": None, "server_logs_channel_id": None, "mod_logs_channel_id": None}
+        SERVER_PREFIXES = {}
         CHAT_LOGS_CHANNEL_ID = None
         RULES_CHANNEL_ID = None
         WELCOME_CHANNEL_ID = None
@@ -320,9 +347,18 @@ def load_config():
         BCA_NOMINATION_DEADLINE = None
         BCA_VOTING_DEADLINE = None
 
+# Initialize bot after loading config
+def init_bot():
+    """Update the bot's prefix function after loading config."""
+    global bot
+    # Update the bot's command prefix to use the dynamic prefix function
+    bot.command_prefix = get_prefix
+
 def save_config():
     """Save the current config dict to CONFIG_FILE."""
-    global CHAT_LOGS_CHANNEL_ID, RULES_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID, BCA_NOMINATIONS_CHANNEL_ID, BCA_NOMINATIONS_LOGS_CHANNEL_ID, BCA_VOTING_CHANNEL_ID, BCA_VOTING_LOGS_CHANNEL_ID, BCA_NOMINATION_DEADLINE, BCA_VOTING_DEADLINE
+    global SERVER_PREFIXES, CHAT_LOGS_CHANNEL_ID, RULES_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID, BCA_NOMINATIONS_CHANNEL_ID, BCA_NOMINATIONS_LOGS_CHANNEL_ID, BCA_VOTING_CHANNEL_ID, BCA_VOTING_LOGS_CHANNEL_ID, BCA_NOMINATION_DEADLINE, BCA_VOTING_DEADLINE
+    # Save server prefixes (convert int keys to string for JSON)
+    config["server_prefixes"] = {str(guild_id): prefix for guild_id, prefix in SERVER_PREFIXES.items()}
     config["chat_logs_channel_id"] = CHAT_LOGS_CHANNEL_ID
     config["rules_channel_id"] = RULES_CHANNEL_ID
     config["welcome_channel_id"] = WELCOME_CHANNEL_ID
@@ -520,6 +556,84 @@ def save_profiles(profiles):
     with open(PROFILES_FILE, "w") as f:
         json.dump(profiles, f, indent=2)
 
+# Message Activity Functions
+def load_message_activity():
+    """Load message activity data from MESSAGE_ACTIVITY_FILE."""
+    global MESSAGE_ACTIVITY
+    try:
+        with open(MESSAGE_ACTIVITY_FILE, "r") as f:
+            data = json.load(f)
+            MESSAGE_ACTIVITY = {}
+            for guild_id_str, guild_data in data.items():
+                guild_id = int(guild_id_str)
+                MESSAGE_ACTIVITY[guild_id] = {}
+                for user_id_str, user_messages in guild_data.items():
+                    user_id = int(user_id_str)
+                    MESSAGE_ACTIVITY[guild_id][user_id] = []
+                    for msg_data in user_messages:
+                        MESSAGE_ACTIVITY[guild_id][user_id].append({
+                            "timestamp": datetime.fromisoformat(msg_data["timestamp"]),
+                            "count": msg_data["count"]
+                        })
+    except FileNotFoundError:
+        MESSAGE_ACTIVITY = {}
+    except Exception as e:
+        print(f"Error loading message activity: {e}")
+        MESSAGE_ACTIVITY = {}
+
+def save_message_activity():
+    """Save message activity data to MESSAGE_ACTIVITY_FILE."""
+    try:
+        data = {}
+        for guild_id, guild_data in MESSAGE_ACTIVITY.items():
+            data[str(guild_id)] = {}
+            for user_id, user_messages in guild_data.items():
+                data[str(guild_id)][str(user_id)] = []
+                for msg_data in user_messages:
+                    data[str(guild_id)][str(user_id)].append({
+                        "timestamp": msg_data["timestamp"].isoformat(),
+                        "count": msg_data["count"]
+                    })
+        
+        with open(MESSAGE_ACTIVITY_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"Error saving message activity: {e}")
+
+def track_message(guild_id, user_id):
+    """Track a message for activity statistics."""
+    if guild_id not in MESSAGE_ACTIVITY:
+        MESSAGE_ACTIVITY[guild_id] = {}
+    
+    if user_id not in MESSAGE_ACTIVITY[guild_id]:
+        MESSAGE_ACTIVITY[guild_id][user_id] = []
+    
+    now = datetime.now(dt_timezone.utc)
+    user_messages = MESSAGE_ACTIVITY[guild_id][user_id]
+    
+    # Check if we have a recent entry (within the last hour) to batch messages
+    if user_messages and (now - user_messages[-1]["timestamp"]).total_seconds() < 3600:
+        # Update the most recent entry
+        user_messages[-1]["count"] += 1
+        user_messages[-1]["timestamp"] = now
+    else:
+        # Create a new entry
+        user_messages.append({
+            "timestamp": now,
+            "count": 1
+        })
+    
+    # Clean up old entries (older than 1 year) to keep file size manageable
+    one_year_ago = now - timedelta(days=365)
+    MESSAGE_ACTIVITY[guild_id][user_id] = [
+        msg for msg in user_messages if msg["timestamp"] > one_year_ago
+    ]
+    
+    # Save periodically (every 10th message to avoid constant file writes)
+    import random
+    if random.randint(1, 10) == 1:
+        save_message_activity()
+
 # BCA System Data Functions
 def load_bca_categories():
     try:
@@ -647,17 +761,17 @@ async def create_server_logging_category(guild_info):
             'messages': await central_guild.create_text_channel(
                 name=f"{sanitize_server_name(guild_info['name'])}-messages",
                 category=category,
-                topic=f"Deleted and edited messages for {guild_info['name']}"
+                topic=f"Deleted/edited messages and reactions for {guild_info['name']}"
             ),
             'mod-logs': await central_guild.create_text_channel(
                 name=f"{sanitize_server_name(guild_info['name'])}-mod-logs",
                 category=category,
                 topic=f"Moderation actions for {guild_info['name']}"
             ),
-            'reactions': await central_guild.create_text_channel(
-                name=f"{sanitize_server_name(guild_info['name'])}-reactions",
+            'tickets': await central_guild.create_text_channel(
+                name=f"{sanitize_server_name(guild_info['name'])}-tickets",
                 category=category,
-                topic=f"Reaction logs for {guild_info['name']}"
+                topic=f"Ticket system logs for {guild_info['name']}"
             )
         }
         
@@ -715,6 +829,45 @@ async def log_to_central_overview(embed, guild_info=None):
             await overview_channel.send(embed=embed)
         except Exception as e:
             print(f"Error logging to central overview: {e}")
+
+async def get_central_logging_channel(guild_id, channel_type):
+    """Get the central logging channel for a specific server and channel type."""
+    if not CENTRAL_LOG_GUILD_ID:
+        return None
+    
+    central_guild = bot.get_guild(CENTRAL_LOG_GUILD_ID)
+    if not central_guild:
+        return None
+    
+    # Find the server's logging category
+    guild = bot.get_guild(guild_id)
+    if not guild:
+        return None
+    
+    category_name = f"{sanitize_server_name(guild.name)}-logs"
+    server_category = discord.utils.get(central_guild.categories, name=category_name)
+    
+    if not server_category:
+        return None
+    
+    # Find the specific channel type within the category
+    channel_name = f"{sanitize_server_name(guild.name)}-{channel_type}"
+    for channel in server_category.channels:
+        if channel.name == channel_name:
+            return channel
+    
+    return None
+
+async def log_to_central_channel(guild_id, channel_type, embed):
+    """Log an embed to a specific central logging channel."""
+    channel = await get_central_logging_channel(guild_id, channel_type)
+    if channel:
+        try:
+            await channel.send(embed=embed)
+            return True
+        except Exception as e:
+            print(f"Error logging to central {channel_type} channel: {e}")
+    return False
 
 # =========================
 # Event Handlers
@@ -939,6 +1092,10 @@ async def on_message(message):
                     time_str = f"{secs}s"
                 await message.channel.send(embed=nova_embed("aFK", f"{member.display_name} iS aFK: {afk['reason']} ({time_str})"))
     add_xp(message.author.id, random.randint(5, 15))
+    
+    # Track message activity for statistics
+    if message.guild:
+        track_message(message.guild.id, message.author.id)
     
     # Check for blacklisted words and auto-delete
     message_lower = message.content.lower()
@@ -1229,6 +1386,52 @@ async def setadminrole(ctx, role_input):
     config["admin_role_id"] = role.id
     save_config()
     await ctx.send(f"Admin role set to {role.name} (ID: {role.id})")
+
+@bot.command()
+async def setprefix(ctx, new_prefix: str = None):
+    """Set the bot's command prefix for this server. Admin/Owner only."""
+    # Check permissions - allow both owner and admins/server owner
+    if not (ctx.author.id == OWNER_ID or has_mod_or_admin(ctx)):
+        await ctx.send(embed=nova_embed("sET pREFIX", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    if ctx.guild is None:
+        await ctx.send(embed=nova_embed("sET pREFIX", "tHIS cOMMAND cAN oNLY bE uSED iN sERVERS!"))
+        return
+    
+    # Get current prefix for this server
+    current_prefix = SERVER_PREFIXES.get(ctx.guild.id, DEFAULT_PREFIX)
+    
+    if new_prefix is None:
+        await ctx.send(embed=nova_embed(
+            "sET pREFIX", 
+            f"cURRENT pREFIX fOR tHIS sERVER: `{current_prefix}`\n\n"
+            f"uSAGE: `{current_prefix}setprefix <new_prefix>`\n"
+            f"eXAMPLE: `{current_prefix}setprefix !`\n\n"
+            f"✅ cHANGES tAKE eFFECT iMMEDIATELY!"
+        ))
+        return
+    
+    # Validate prefix
+    if len(new_prefix) > 5:
+        await ctx.send(embed=nova_embed("sET pREFIX", "pREFIX mUST bE 5 cHARACTERS oR lESS!"))
+        return
+    
+    if new_prefix.isspace() or not new_prefix:
+        await ctx.send(embed=nova_embed("sET pREFIX", "pREFIX cANNOT bE eMPTY oR oNLY sPACES!"))
+        return
+    
+    # Save the new prefix for this server
+    old_prefix = current_prefix
+    SERVER_PREFIXES[ctx.guild.id] = new_prefix
+    save_config()
+    
+    await ctx.send(embed=nova_embed(
+        "✅ pREFIX uPDATED!",
+        f"pREFIX cHANGED fROM `{old_prefix}` tO `{new_prefix}`\n\n"
+        f"✅ **cHANGE iS aCTIVE iMMEDIATELY!**\n"
+        f"tRY uSING `{new_prefix}ping` tO tEST!"
+    ))
 
 @bot.command()
 async def setserver(ctx):
@@ -1724,6 +1927,102 @@ async def impregnate(ctx, partner: discord.Member):
     change_balance(receiver.id, child_support)
     await ctx.send(f"{ctx.author.mention} impregnated {partner.mention}!\n{payer.mention} pays {child_support} {CURRENCY_NAME} as child support to {receiver.mention}.")
 
+class NukeConfirmView(discord.ui.View):
+    def __init__(self, ctx):
+        super().__init__(timeout=30)
+        self.ctx = ctx
+        self.value = None
+    
+    @discord.ui.button(label='Yes, Nuke It', style=discord.ButtonStyle.danger, emoji='💥')
+    async def confirm_nuke(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("Only the command user can confirm this action!", ephemeral=True)
+            return
+        
+        self.value = True
+        self.stop()
+        
+        # Fetch messages before deleting to log them
+        messages_to_delete = []
+        async for message in self.ctx.channel.history(limit=1000):
+            messages_to_delete.append(message)
+        
+        # Create a document of nuked messages
+        if messages_to_delete:
+            nuked_messages_log = f"Nuked Messages Log - {self.ctx.channel.name}\n"
+            nuked_messages_log += f"Nuked by: {self.ctx.author} ({self.ctx.author.id})\n"
+            nuked_messages_log += f"Nuked at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            nuked_messages_log += f"Channel: #{self.ctx.channel.name} ({self.ctx.channel.id})\n"
+            nuked_messages_log += "=" * 50 + "\n\n"
+            
+            for i, msg in enumerate(reversed(messages_to_delete), 1):
+                timestamp = msg.created_at.strftime('%Y-%m-%d %H:%M:%S')
+                content = msg.content or "[No text content]"
+                attachments = ", ".join([att.filename for att in msg.attachments]) if msg.attachments else "None"
+                
+                nuked_messages_log += f"Message {i}:\n"
+                nuked_messages_log += f"Author: {msg.author} ({msg.author.id})\n"
+                nuked_messages_log += f"Timestamp: {timestamp}\n"
+                nuked_messages_log += f"Content: {content}\n"
+                nuked_messages_log += f"Attachments: {attachments}\n"
+                nuked_messages_log += "-" * 30 + "\n\n"
+            
+            # Send the log as a file to the mod logs channel
+            if MOD_LOGS_CHANNEL_ID:
+                mod_logs_channel = self.ctx.guild.get_channel(MOD_LOGS_CHANNEL_ID)
+                if mod_logs_channel:
+                    file_content = nuked_messages_log.encode('utf-8')
+                    filename = f"nuked_messages_{self.ctx.channel.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                    file = discord.File(io.BytesIO(file_content), filename=filename)
+                    
+                    embed = discord.Embed(
+                        title="💥 Channel Nuked",
+                        description=f"**Channel:** {self.ctx.channel.mention}\n**Moderator:** {self.ctx.author.mention}\n**Messages Deleted:** {len(messages_to_delete)}",
+                        color=0xff0000,
+                        timestamp=datetime.now()
+                    )
+                    await mod_logs_channel.send(embed=embed, file=file)
+        
+        # Now nuke the channel (delete all messages)
+        deleted = await self.ctx.channel.purge(limit=1000)
+        await self.ctx.send("💥 **BOOM!** Channel has been nuked!", delete_after=5)
+        
+        # Log the mod action
+        await log_mod_action(self.ctx.guild, "nuke", self.ctx.author, None, f"Nuked all messages in {self.ctx.channel.mention} ({len(deleted)} messages)")
+        
+        # Update the interaction message
+        await interaction.response.edit_message(
+            embed=nova_embed("💥 nUKE cOMPLETE!", f"cHANNEL hAS bEEN nUKED! {len(deleted)} mESSAGES dELETED."),
+            view=None
+        )
+    
+    @discord.ui.button(label='Cancel', style=discord.ButtonStyle.secondary, emoji='❌')
+    async def cancel_nuke(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("Only the command user can cancel this action!", ephemeral=True)
+            return
+        
+        self.value = False
+        self.stop()
+        
+        await interaction.response.edit_message(
+            embed=nova_embed("❌ nUKE cANCELLED", "nUKE oPERATION wAS cANCELLED."),
+            view=None
+        )
+    
+    async def on_timeout(self):
+        # Disable all buttons on timeout
+        for item in self.children:
+            item.disabled = True
+        
+        try:
+            await self.message.edit(
+                embed=nova_embed("⏰ nUKE tIMEOUT", "nUKE cONFIRMATION tIMED oUT. oPERATION cANCELLED."),
+                view=self
+            )
+        except:
+            pass
+
 @bot.command()
 async def nuke(ctx):
     print(f"\n🔥 NUKE COMMAND RECEIVED from {ctx.author} in {ctx.guild.name if ctx.guild else 'DM'}")
@@ -1732,10 +2031,20 @@ async def nuke(ctx):
         await ctx.send("You don't have permission to use this command.")
         return
     print(f"✅ Permission check passed for {ctx.author}")
-    await ctx.channel.purge(limit=1000)
-    await ctx.send("boom")
-    # Log the mod action
-    await log_mod_action(ctx.guild, "nuke", ctx.author, None, f"Nuked all messages in {ctx.channel.mention}")
+    
+    # Create confirmation embed
+    confirm_embed = nova_embed(
+        "⚠️ nUKE cONFIRMATION",
+        f"aRE yOU sURE yOU wANT tO nUKE #{ctx.channel.name}?\n\n"
+        f"**⚠️ tHIS aCTION iS iRREVERSIBLE!**\n"
+        f"aLL mESSAGES iN tHIS cHANNEL wILL bE pERMANENTLY dELETED!\n\n"
+        f"📁 a bACKUP fILE wILL bE cREATED iN mOD lOGS\n"
+        f"⏰ yOU hAVE 30 sECONDS tO cONFIRM"
+    )
+    
+    view = NukeConfirmView(ctx)
+    message = await ctx.send(embed=confirm_embed, view=view)
+    view.message = message
 
 @bot.command()
 async def kick(ctx, member: discord.Member = None, *, reason="No reason provided"):
@@ -4577,33 +4886,48 @@ async def on_message_delete(message):
         'time': message.created_at
     }
     
-    # Chat logs for mods - Enhanced debugging
+    # Central logging for deleted messages
     print(f"DEBUG: Message deleted by {message.author} in {message.channel}")
-    print(f"DEBUG: CHAT_LOGS_CHANNEL_ID = {CHAT_LOGS_CHANNEL_ID}")
     
-    if CHAT_LOGS_CHANNEL_ID:
-        guild = message.guild
-        print(f"DEBUG: Guild = {guild}")
-        if guild:
-            log_channel = guild.get_channel(CHAT_LOGS_CHANNEL_ID)
-            print(f"DEBUG: Log channel = {log_channel}")
+    if message.guild:
+        # Create embed for both central and local logging
+        content = message.content if message.content else "*[No text content]*"
+        embed = discord.Embed(
+            title="🗑️ Message Deleted",
+            color=0xff4444,
+            timestamp=datetime.now(dt_timezone.utc)
+        )
+        embed.add_field(name="Author", value=f"{message.author.mention}\n`{message.author.id}`", inline=True)
+        embed.add_field(name="Channel", value=f"{message.channel.mention}\n`{message.channel.id}`", inline=True)
+        embed.add_field(name="Message ID", value=f"`{message.id}`", inline=True)
+        embed.add_field(name="Content", value=content[:1024], inline=False)
+        
+        if message.author.avatar:
+            embed.set_thumbnail(url=message.author.avatar.url)
+        
+        # Log to central messages channel
+        central_logged = await log_to_central_channel(message.guild.id, "messages", embed)
+        
+        if central_logged:
+            print(f"DEBUG: Message deletion logged to central messages channel")
+        else:
+            print(f"DEBUG: Central logging failed for message deletion")
+        
+        # Also log to local channel if configured (simultaneous, not fallback)
+        if CHAT_LOGS_CHANNEL_ID:
+            log_channel = message.guild.get_channel(CHAT_LOGS_CHANNEL_ID)
             if log_channel:
                 try:
-                    content = message.content if message.content else "*[No text content]*"
-                    embed = nova_embed("🗑️ mESSAGE dELETED", f"**Author:** {message.author}\n**Channel:** {message.channel.mention}\n**Message ID:** {message.id}\n**Content:** {content}")
-                    embed.timestamp = datetime.now(dt_timezone.utc)
                     await log_channel.send(embed=embed)
-                    print(f"DEBUG: Chat log sent successfully to {log_channel.name}")
+                    print(f"DEBUG: Message deletion also logged to local channel {log_channel.name}")
                 except Exception as e:
-                    print(f"ERROR: Failed to send chat log: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    print(f"ERROR: Failed to send to local chat log: {e}")
             else:
-                print(f"ERROR: Chat logs channel not found with ID: {CHAT_LOGS_CHANNEL_ID}")
+                print(f"ERROR: Local chat logs channel not found with ID: {CHAT_LOGS_CHANNEL_ID}")
         else:
-            print("ERROR: Guild not found for message deletion")
+            print("DEBUG: No local chat logs channel configured")
     else:
-        print("DEBUG: CHAT_LOGS_CHANNEL_ID is None - chat logs disabled")
+        print("DEBUG: Message deletion in DM, skipping logging")
 
 @bot.event
 async def on_message_edit(before, after):
@@ -6167,6 +6491,292 @@ async def setmodlogs(ctx, channel: discord.TextChannel = None):
         MOD_LOGS_CHANNEL_ID = channel.id
         await ctx.send(embed=nova_embed("sET mOD lOGS", f"Mod logs channel set to: {channel.mention}"))
     save_config()
+
+@bot.command()
+async def setlogs(ctx, category_name: str = "📋 Logs"):
+    """Automatically create all standard log channels (Admin/Mod only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("sET lOGS", "Only admins/mods can set up logging channels!"))
+        return
+    
+    guild = ctx.guild
+    if not guild:
+        await ctx.send(embed=nova_embed("sET lOGS", "This command can only be used in a server!"))
+        return
+    
+    # Send initial status
+    status_embed = nova_embed(
+        "🔄 sETTING uP lOGGING",
+        "Creating standard log channels..."
+    )
+    status_msg = await ctx.send(embed=status_embed)
+    
+    try:
+        # Create or find logs category
+        logs_category = discord.utils.get(guild.categories, name=category_name)
+        if not logs_category:
+            logs_category = await guild.create_category(
+                name=category_name,
+                reason=f"Auto-created by {ctx.author} for logging setup"
+            )
+        
+        created_channels = []
+        updated_configs = []
+        
+        # Define standard log channels to create
+        log_channels = [
+            {
+                'name': 'chat-logs',
+                'topic': 'Deleted and edited messages',
+                'config_var': 'CHAT_LOGS_CHANNEL_ID',
+                'config_key': 'chat_logs_channel_id'
+            },
+            {
+                'name': 'join-leave-logs', 
+                'topic': 'Member joins and leaves',
+                'config_var': 'JOIN_LEAVE_LOGS_CHANNEL_ID',
+                'config_key': 'join_leave_logs_channel_id'
+            },
+            {
+                'name': 'server-logs',
+                'topic': 'Server changes and member updates', 
+                'config_var': 'SERVER_LOGS_CHANNEL_ID',
+                'config_key': 'server_logs_channel_id'
+            },
+            {
+                'name': 'mod-logs',
+                'topic': 'Moderation actions (bans, kicks, warnings)',
+                'config_var': 'MOD_LOGS_CHANNEL_ID', 
+                'config_key': 'mod_logs_channel_id'
+            },
+            {
+                'name': 'ticket-logs',
+                'topic': 'Ticket system logs',
+                'config_var': 'TICKET_LOGS_CHANNEL_ID',
+                'config_key': 'ticket_logs_channel_id'
+            }
+        ]
+        
+        global CHAT_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID, TICKET_LOGS_CHANNEL_ID
+        
+        # Create each log channel
+        for channel_info in log_channels:
+            # Check if channel already exists
+            existing_channel = discord.utils.get(guild.channels, name=channel_info['name'])
+            
+            if existing_channel:
+                # Channel exists, just update config
+                if channel_info['config_var'] == 'CHAT_LOGS_CHANNEL_ID':
+                    CHAT_LOGS_CHANNEL_ID = existing_channel.id
+                elif channel_info['config_var'] == 'JOIN_LEAVE_LOGS_CHANNEL_ID':
+                    JOIN_LEAVE_LOGS_CHANNEL_ID = existing_channel.id
+                elif channel_info['config_var'] == 'SERVER_LOGS_CHANNEL_ID':
+                    SERVER_LOGS_CHANNEL_ID = existing_channel.id
+                elif channel_info['config_var'] == 'MOD_LOGS_CHANNEL_ID':
+                    MOD_LOGS_CHANNEL_ID = existing_channel.id
+                elif channel_info['config_var'] == 'TICKET_LOGS_CHANNEL_ID':
+                    TICKET_LOGS_CHANNEL_ID = existing_channel.id
+                
+                config[channel_info['config_key']] = existing_channel.id
+                updated_configs.append(f"✅ {existing_channel.mention} (existing)")
+            else:
+                # Create new channel
+                new_channel = await guild.create_text_channel(
+                    name=channel_info['name'],
+                    category=logs_category,
+                    topic=channel_info['topic'],
+                    reason=f"Auto-created by {ctx.author} for logging setup"
+                )
+                
+                # Update global variables and config
+                if channel_info['config_var'] == 'CHAT_LOGS_CHANNEL_ID':
+                    CHAT_LOGS_CHANNEL_ID = new_channel.id
+                elif channel_info['config_var'] == 'JOIN_LEAVE_LOGS_CHANNEL_ID':
+                    JOIN_LEAVE_LOGS_CHANNEL_ID = new_channel.id
+                elif channel_info['config_var'] == 'SERVER_LOGS_CHANNEL_ID':
+                    SERVER_LOGS_CHANNEL_ID = new_channel.id
+                elif channel_info['config_var'] == 'MOD_LOGS_CHANNEL_ID':
+                    MOD_LOGS_CHANNEL_ID = new_channel.id
+                elif channel_info['config_var'] == 'TICKET_LOGS_CHANNEL_ID':
+                    TICKET_LOGS_CHANNEL_ID = new_channel.id
+                
+                config[channel_info['config_key']] = new_channel.id
+                created_channels.append(f"🆕 {new_channel.mention}")
+        
+        # Save configuration
+        save_config()
+        
+        # Send completion message
+        completion_embed = nova_embed(
+            "✅ lOGGING sETUP cOMPLETE!",
+            f"**Category:** {logs_category.mention}\n\n"
+            f"**Created Channels:**\n{chr(10).join(created_channels) if created_channels else 'None (all existed)'}\n\n"
+            f"**Configured Channels:**\n{chr(10).join(updated_configs)}\n\n"
+            f"All standard logging is now active!"
+        )
+        completion_embed.add_field(
+            name="📋 Available Log Types",
+            value="• **Chat Logs** - Deleted/edited messages\n"
+                  "• **Join/Leave Logs** - Member activity\n"
+                  "• **Server Logs** - Server changes & member updates\n"
+                  "• **Mod Logs** - Moderation actions\n"
+                  "• **Ticket Logs** - Ticket system activity",
+            inline=False
+        )
+        completion_embed.set_footer(text=f"Set up by {ctx.author}")
+        await status_msg.edit(embed=completion_embed)
+        
+    except discord.Forbidden:
+        await status_msg.edit(embed=nova_embed(
+            "❌ pERMISSION eRROR",
+            "I don't have permission to create channels or categories!\n"
+            "Please give me **Manage Channels** permission."
+        ))
+    except Exception as e:
+        await status_msg.edit(embed=nova_embed(
+            "❌ sETUP fAILED",
+            f"An error occurred: {str(e)}"
+        ))
+        print(f"Error in setlogs command: {e}")
+        import traceback
+        traceback.print_exc()
+
+@bot.command()
+async def scanhistory(ctx):
+    """Scan server message history to build comprehensive activity stats (Owner only)"""
+    if ctx.author.id != OWNER_ID:
+        await ctx.send(embed=nova_embed("sCAN hISTORY", "oNLY tHE oWNER cAN rUN tHIS cOMMAND!"))
+        return
+    
+    if not ctx.guild:
+        await ctx.send(embed=nova_embed("sCAN hISTORY", "tHIS cOMMAND cAN oNLY bE uSED iN sERVERS!"))
+        return
+    
+    guild = ctx.guild
+    guild_id = guild.id
+    
+    # Send initial status
+    status_embed = nova_embed(
+        "🔍 sCAN hISTORY",
+        f"Scanning message history for **{guild.name}**...\n"
+        f"This may take several minutes for large servers."
+    )
+    status_msg = await ctx.send(embed=status_embed)
+    
+    try:
+        # Initialize or clear existing data for this server
+        MESSAGE_ACTIVITY[guild_id] = {}
+        
+        total_messages = 0
+        total_channels = 0
+        processed_channels = 0
+        
+        # Get all text channels
+        text_channels = [channel for channel in guild.channels if isinstance(channel, discord.TextChannel)]
+        total_channels = len(text_channels)
+        
+        # Update status
+        await status_msg.edit(embed=nova_embed(
+            "🔍 sCAN hISTORY",
+            f"Found {total_channels} text channels to scan...\n"
+            f"Starting historical scan from server creation: {guild.created_at.strftime('%B %d, %Y')}"
+        ))
+        
+        for channel in text_channels:
+            try:
+                processed_channels += 1
+                channel_messages = 0
+                
+                # Update progress every few channels
+                if processed_channels % 5 == 0 or processed_channels == total_channels:
+                    progress_embed = nova_embed(
+                        "🔍 sCAN hISTORY",
+                        f"**Progress:** {processed_channels}/{total_channels} channels\n"
+                        f"**Current:** #{channel.name}\n"
+                        f"**Total Messages:** {total_messages:,}\n"
+                        f"**Channel Messages:** {channel_messages:,}"
+                    )
+                    await status_msg.edit(embed=progress_embed)
+                
+                # Scan messages in this channel (from oldest to newest)
+                async for message in channel.history(limit=None, oldest_first=True):
+                    # Skip bot messages
+                    if message.author.bot:
+                        continue
+                    
+                    user_id = message.author.id
+                    message_date = message.created_at
+                    
+                    # Initialize user data if needed
+                    if user_id not in MESSAGE_ACTIVITY[guild_id]:
+                        MESSAGE_ACTIVITY[guild_id][user_id] = []
+                    
+                    user_messages = MESSAGE_ACTIVITY[guild_id][user_id]
+                    
+                    # Check if we can batch with recent entry (within same day)
+                    if (user_messages and 
+                        user_messages[-1]["timestamp"].date() == message_date.date()):
+                        # Update the most recent entry for this day
+                        user_messages[-1]["count"] += 1
+                        if message_date > user_messages[-1]["timestamp"]:
+                            user_messages[-1]["timestamp"] = message_date
+                    else:
+                        # Create a new entry for this day
+                        user_messages.append({
+                            "timestamp": message_date,
+                            "count": 1
+                        })
+                    
+                    total_messages += 1
+                    channel_messages += 1
+                    
+                    # Save periodically to avoid memory issues
+                    if total_messages % 10000 == 0:
+                        save_message_activity()
+                        await status_msg.edit(embed=nova_embed(
+                            "🔍 sCAN hISTORY",
+                            f"**Progress:** {processed_channels}/{total_channels} channels\n"
+                            f"**Current:** #{channel.name}\n"
+                            f"**Total Messages:** {total_messages:,}\n"
+                            f"**Saving progress...**"
+                        ))
+                
+            except discord.Forbidden:
+                # Skip channels we can't access
+                continue
+            except Exception as e:
+                print(f"Error scanning channel {channel.name}: {e}")
+                continue
+        
+        # Final save
+        save_message_activity()
+        
+        # Calculate some stats
+        unique_users = len(MESSAGE_ACTIVITY[guild_id])
+        
+        # Send completion message
+        completion_embed = nova_embed(
+            "✅ hISTORY sCAN cOMPLETE!",
+            f"**Server:** {guild.name}\n"
+            f"**Scanned Period:** {guild.created_at.strftime('%B %d, %Y')} - Today\n"
+            f"**Total Messages:** {total_messages:,}\n"
+            f"**Unique Users:** {unique_users:,}\n"
+            f"**Channels Scanned:** {processed_channels}/{total_channels}\n\n"
+            f"?mostactive now shows true lifetime stats!"
+        )
+        completion_embed.set_footer(text=f"Scan completed by {ctx.author}")
+        await status_msg.edit(embed=completion_embed)
+        
+    except Exception as e:
+        await status_msg.edit(embed=nova_embed(
+            "❌ sCAN fAILED",
+            f"An error occurred during the scan: {str(e)}\n\n"
+            f"Progress: {processed_channels}/{total_channels} channels\n"
+            f"Messages scanned: {total_messages:,}"
+        ))
+        print(f"Error in scanhistory command: {e}")
+        import traceback
+        traceback.print_exc()
 
 # Helper function to log mod actions
 async def log_mod_action(guild, action, moderator, target, reason=None, duration=None):
@@ -7941,6 +8551,168 @@ async def membercount(ctx):
     
     await ctx.send(embed=embed)
 
+@bot.command()
+async def mostactive(ctx):
+    """Show the most active users by message count for all time periods (Admin/Mod only)"""
+    # Check permissions - only mods/admins can use this command
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("mOST aCTIVE", "yOU dON'T hAVE pERMISSION tO uSE tHIS cOMMAND!"))
+        return
+        
+    if not ctx.guild:
+        await ctx.send(embed=nova_embed("mOST aCTIVE", "tHIS cOMMAND cAN oNLY bE uSED iN sERVERS!"))
+        return
+    
+    guild_id = ctx.guild.id
+    
+    # Check if we have data for this server
+    if guild_id not in MESSAGE_ACTIVITY:
+        await ctx.send(embed=nova_embed("mOST aCTIVE", "nO mESSAGE dATA fOUND fOR tHIS sERVER yET!"))
+        return
+    
+    now = datetime.now(dt_timezone.utc)
+    
+    # Define all periods
+    periods = [
+        ("lAST mONTH", now - timedelta(days=30)),
+        ("lAST 3 mONTHS", now - timedelta(days=90)),
+        ("lAST yEAR", now - timedelta(days=365)),
+        ("lIFETIME", datetime.min.replace(tzinfo=dt_timezone.utc))
+    ]
+    
+    embed = nova_embed("📊 mOST aCTIVE uSERS", "")
+    
+    for period_name, cutoff in periods:
+        # Calculate message counts for each user for this period
+        user_counts = {}
+        for user_id, messages in MESSAGE_ACTIVITY[guild_id].items():
+            total_count = 0
+            for msg_data in messages:
+                if msg_data["timestamp"] >= cutoff:
+                    total_count += msg_data["count"]
+            
+            if total_count > 0:
+                user_counts[user_id] = total_count
+        
+        if user_counts:
+            # Sort users by message count (descending) and get top 3
+            sorted_users = sorted(user_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            
+            # Create leaderboard for this period
+            leaderboard = []
+            for i, (user_id, count) in enumerate(sorted_users, 1):
+                member = ctx.guild.get_member(user_id)
+                if member:
+                    # Add medal emojis for top 3
+                    if i == 1:
+                        emoji = "🥇"
+                    elif i == 2:
+                        emoji = "🥈"
+                    elif i == 3:
+                        emoji = "🥉"
+                    
+                    leaderboard.append(f"{emoji} **{member.display_name}** - {count:,}")
+                else:
+                    # User left the server
+                    leaderboard.append(f"{i}. *[User Left]* - {count:,}")
+            
+            embed.add_field(
+                name=f"**{period_name}**",
+                value="\n".join(leaderboard) if leaderboard else "nO dATA",
+                inline=True
+            )
+        else:
+            embed.add_field(
+                name=f"**{period_name}**",
+                value="nO dATA",
+                inline=True
+            )
+    
+    embed.set_footer(text=f"dATA sTARTS fROM sERVER cREATION • sHOWING tOP 3 pER pERIOD")
+    
+    await ctx.send(embed=embed)
+
+@bot.tree.command(name="mostactive", description="Show the most active users by message count for all time periods (Admin/Mod only)")
+async def mostactive_slash(interaction: discord.Interaction):
+    """Show the most active users by message count for all time periods (slash command version)"""
+    # Check permissions - only mods/admins can use this command
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("mOST aCTIVE", "yOU dON'T hAVE pERMISSION tO uSE tHIS cOMMAND!"), ephemeral=True)
+        return
+        
+    if not interaction.guild:
+        await interaction.response.send_message(embed=nova_embed("mOST aCTIVE", "tHIS cOMMAND cAN oNLY bE uSED iN sERVERS!"), ephemeral=True)
+        return
+    
+    guild_id = interaction.guild.id
+    
+    # Check if we have data for this server
+    if guild_id not in MESSAGE_ACTIVITY:
+        await interaction.response.send_message(embed=nova_embed("mOST aCTIVE", "nO mESSAGE dATA fOUND fOR tHIS sERVER yET!"), ephemeral=True)
+        return
+    
+    now = datetime.now(dt_timezone.utc)
+    
+    # Define all periods
+    periods = [
+        ("lAST mONTH", now - timedelta(days=30)),
+        ("lAST 3 mONTHS", now - timedelta(days=90)),
+        ("lAST yEAR", now - timedelta(days=365)),
+        ("lIFETIME", datetime.min.replace(tzinfo=dt_timezone.utc))
+    ]
+    
+    embed = nova_embed("📊 mOST aCTIVE uSERS", "")
+    
+    for period_name, cutoff in periods:
+        # Calculate message counts for each user for this period
+        user_counts = {}
+        for user_id, messages in MESSAGE_ACTIVITY[guild_id].items():
+            total_count = 0
+            for msg_data in messages:
+                if msg_data["timestamp"] >= cutoff:
+                    total_count += msg_data["count"]
+            
+            if total_count > 0:
+                user_counts[user_id] = total_count
+        
+        if user_counts:
+            # Sort users by message count (descending) and get top 3
+            sorted_users = sorted(user_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            
+            # Create leaderboard for this period
+            leaderboard = []
+            for i, (user_id, count) in enumerate(sorted_users, 1):
+                member = interaction.guild.get_member(user_id)
+                if member:
+                    # Add medal emojis for top 3
+                    if i == 1:
+                        emoji = "🥇"
+                    elif i == 2:
+                        emoji = "🥈"
+                    elif i == 3:
+                        emoji = "🥉"
+                    
+                    leaderboard.append(f"{emoji} **{member.display_name}** - {count:,}")
+                else:
+                    # User left the server
+                    leaderboard.append(f"{i}. *[User Left]* - {count:,}")
+            
+            embed.add_field(
+                name=f"**{period_name}**",
+                value="\n".join(leaderboard) if leaderboard else "nO dATA",
+                inline=True
+            )
+        else:
+            embed.add_field(
+                name=f"**{period_name}**",
+                value="nO dATA",
+                inline=True
+            )
+    
+    embed.set_footer(text=f"dATA sTARTS fROM sERVER cREATION • sHOWING tOP 3 pER pERIOD")
+    
+    await interaction.response.send_message(embed=embed)
+
 @bot.tree.command(name="membercount", description="Show server member statistics")
 async def membercount_slash(interaction: discord.Interaction):
     """Show server member statistics (slash command version)"""
@@ -8952,5 +9724,9 @@ async def centralloggingstatus(ctx):
     )
     
     await ctx.send(embed=embed)
+
+# Load config and initialize bot before running
+load_config()
+init_bot()
 
 bot.run(TOKEN)
