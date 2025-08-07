@@ -1,14 +1,22 @@
 {
-  "test": {
-    "end_time": "2025-08-05T00:00:00-04:00",
-    "description": "13:00"
+  "global": {
+    "test": {
+      "end_time": "2025-08-05T00:00:00-04:00",
+      "description": "13:00"
+    },
+    "somethin": {
+      "end_time": "2025-08-05T00:00:00-04:00",
+      "description": "12:30"
+    },
+    "yo": {
+      "end_time": "2025-08-05T13:00:00-04:00",
+      "description": "No description provided"
+    }
   },
-  "somethin": {
-    "end_time": "2025-08-05T00:00:00-04:00",
-    "description": "12:30"
-  },
-  "yo": {
-    "end_time": "2025-08-05T13:00:00-04:00",
-    "description": "No description provided"
+  "911820034819645510": {
+    "The BCAs": {
+      "end_time": "2025-08-09T08:00:00-04:00",
+      "description": "\"Nominations\""
+    }
   }
 }

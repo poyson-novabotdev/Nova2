@@ -2,7 +2,7 @@
 # Imports and Setup
 # =========================
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import json
 import random
 from datetime import datetime, timedelta, timezone as dt_timezone
@@ -52,9 +52,10 @@ BCA_NOMINATIONS_FILE = "bca_nominations.json"
 BCA_VOTES_FILE = "bca_votes.json"
 BCA_CATEGORIES_FILE = "bca_categories.json"
 BCA_COUNTDOWNS_FILE = "bca_countdowns.json"
+SERVER_CONFIGS_FILE = "server_configs.json"
 
-balances = {}
-user_xp = {}
+balances = {}  # guild_id: {user_id: balance}
+user_xp = {}  # guild_id: {user_id: xp_data}
 config = {}
 
 # Per-server prefixes - loaded from config, defaults to "?"
@@ -74,6 +75,74 @@ def get_prefix(bot, message):
 beg_cooldowns = {}
 work_cooldowns = {}
 daily_cooldowns = {}
+
+# Live countdown message tracking
+active_countdown_messages = {}  # message_id: {guild_id, channel_id, event_name, message_obj}
+
+# Background task for live countdown updates
+async def countdown_update_loop():
+    """Continuously update countdown messages every second"""
+    global active_countdown_messages, BCA_COUNTDOWNS
+    
+    print("🔴 COUNTDOWN UPDATE LOOP STARTED - RUNNING EVERY SECOND")
+    
+    while True:
+        try:
+            if active_countdown_messages:
+                print(f"DEBUG: Updating {len(active_countdown_messages)} countdown messages...")
+                
+                messages_to_remove = []
+                
+                for message_id, data in list(active_countdown_messages.items()):
+                    try:
+                        guild_id = data['guild_id']
+                        event_name = data['event_name']
+                        message = data['message_obj']
+                        
+                        # Get current countdown data
+                        server_countdowns = BCA_COUNTDOWNS.get(guild_id, {})
+                        if event_name not in server_countdowns:
+                            messages_to_remove.append(message_id)
+                            continue
+                        
+                        event_data = server_countdowns[event_name]
+                        est = pytz.timezone('US/Eastern')
+                        now = datetime.now(est)
+                        time_diff = event_data["end_time"] - now
+                        
+                        if time_diff.total_seconds() <= 0:
+                            time_str = "eVENT hAS eNDED!"
+                            messages_to_remove.append(message_id)
+                        else:
+                            days = time_diff.days
+                            hours, remainder = divmod(time_diff.seconds, 3600)
+                            minutes, seconds = divmod(remainder, 60)
+                            time_str = f"{days} days, {hours} hours, {minutes} minutes, {seconds} seconds"
+                        
+                        # Update the embed
+                        description = f"{event_data['description']}\n\n⏱️ **tIME rEMAINING:** **{time_str}**"
+                        embed = nova_embed(f"⏰ {event_name}", description)
+                        
+                        # Edit the message
+                        await message.edit(embed=embed)
+                        print(f"✅ Updated countdown for {event_name}")
+                        
+                    except Exception as e:
+                        print(f"❌ Error updating countdown message {message_id}: {e}")
+                        messages_to_remove.append(message_id)
+                
+                # Remove failed/ended messages
+                for message_id in messages_to_remove:
+                    if message_id in active_countdown_messages:
+                        del active_countdown_messages[message_id]
+                        print(f"🗑️ Removed countdown message {message_id} from tracking")
+            
+            # Wait 1 second before next update
+            await asyncio.sleep(1)
+            
+        except Exception as e:
+            print(f"❌ Error in countdown update loop: {e}")
+            await asyncio.sleep(1)
 
 OWNER_ID = 755846396208218174
 
@@ -128,7 +197,8 @@ BCA_VOTING_LOGS_CHANNEL_ID = None  # Set by ?setbcavotinglogs
 BCA_CATEGORIES = {}  # category_name: {"allow_self_nomination": bool}
 BCA_NOMINATIONS = {}  # category: {user_id: {"nominee": user_id, "nominator": user_id}}
 BCA_VOTES = {}  # category: {user_id: nominee_id}
-BCA_COUNTDOWNS = {}  # event_name: {"end_time": datetime, "description": str}
+BCA_COUNTDOWNS = {}  # guild_id: {event_name: {"end_time": datetime, "description": str}}
+SERVER_CONFIGS = {}  # guild_id: {"chat_logs": channel_id, "server_logs": channel_id, etc.}
 BCA_NOMINATION_DEADLINE = None  # datetime when nominations close
 BCA_VOTING_DEADLINE = None  # datetime when voting closes
 
@@ -288,7 +358,7 @@ INTERNATIONAL_DAYS = {
 
 def load_config():
     """Load configuration from CONFIG_FILE into the global config dict."""
-    global config, SERVER_PREFIXES, CHAT_LOGS_CHANNEL_ID, RULES_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID, BCA_NOMINATIONS_CHANNEL_ID, BCA_NOMINATIONS_LOGS_CHANNEL_ID, BCA_VOTING_CHANNEL_ID, BCA_VOTING_LOGS_CHANNEL_ID, BCA_CATEGORIES, BCA_NOMINATIONS, BCA_VOTES, BCA_COUNTDOWNS, BCA_NOMINATION_DEADLINE, BCA_VOTING_DEADLINE, CENTRAL_LOG_GUILD_ID, CENTRAL_OVERVIEW_CHANNEL_ID, CENTRAL_ARCHIVE_CATEGORY_ID
+    global config, SERVER_PREFIXES, CHAT_LOGS_CHANNEL_ID, RULES_CHANNEL_ID, WELCOME_CHANNEL_ID, FAREWELL_CHANNEL_ID, RUNWAY_CHANNEL_ID, TICKET_CATEGORY_ID, SUPPORT_ROLE_ID, TICKET_LOGS_CHANNEL_ID, JOIN_LEAVE_LOGS_CHANNEL_ID, SERVER_LOGS_CHANNEL_ID, MOD_LOGS_CHANNEL_ID, BCA_NOMINATIONS_CHANNEL_ID, BCA_NOMINATIONS_LOGS_CHANNEL_ID, BCA_VOTING_CHANNEL_ID, BCA_VOTING_LOGS_CHANNEL_ID, BCA_CATEGORIES, BCA_NOMINATIONS, BCA_VOTES, BCA_COUNTDOWNS, BCA_NOMINATION_DEADLINE, BCA_VOTING_DEADLINE, CENTRAL_LOG_GUILD_ID, CENTRAL_OVERVIEW_CHANNEL_ID, CENTRAL_ARCHIVE_CATEGORY_ID, SERVER_CONFIGS
     try:
         with open(CONFIG_FILE, "r") as f:
             config = json.load(f)
@@ -319,6 +389,7 @@ def load_config():
             BCA_NOMINATIONS = load_bca_nominations()
             BCA_VOTES = load_bca_votes()
             BCA_COUNTDOWNS = load_bca_countdowns()
+            SERVER_CONFIGS = load_server_configs()
             # Load BCA deadlines
             BCA_NOMINATION_DEADLINE = datetime.fromisoformat(config.get("bca_nomination_deadline")) if config.get("bca_nomination_deadline") else None
             BCA_VOTING_DEADLINE = datetime.fromisoformat(config.get("bca_voting_deadline")) if config.get("bca_voting_deadline") else None
@@ -344,6 +415,7 @@ def load_config():
         BCA_NOMINATIONS = {}
         BCA_VOTES = {}
         BCA_COUNTDOWNS = {}
+        SERVER_CONFIGS = {}
         BCA_NOMINATION_DEADLINE = None
         BCA_VOTING_DEADLINE = None
 
@@ -384,25 +456,46 @@ def load_balances():
     global balances
     try:
         with open(DATA_FILE, "r") as f:
-            balances = json.load(f)
+            data = json.load(f)
+            # Handle both old format (global) and new format (per-server)
+            if data and isinstance(list(data.values())[0], (int, float)):
+                # Old format - migrate to new format under a default guild
+                print("Migrating old balance format to server-specific format")
+                balances = {"global": data}
+            else:
+                # New format - per server, convert string keys to integers
+                balances = {}
+                for guild_id, guild_balances in data.items():
+                    balances[int(guild_id)] = guild_balances
     except FileNotFoundError:
         balances = {}
 
 def save_balances():
     """Save the current balances dict to DATA_FILE."""
     with open(DATA_FILE, "w") as f:
-        json.dump(balances, f)
+        # Convert integer keys to strings for JSON
+        data = {}
+        for guild_id, guild_balances in balances.items():
+            data[str(guild_id)] = guild_balances
+        json.dump(data, f)
 
-def get_balance(user_id):
-    """Get the balance for a user by their ID."""
-    return balances.get(str(user_id), 0)
+def get_balance(user_id, guild_id):
+    """Get the balance for a user by their ID in a specific server."""
+    guild_balances = balances.get(guild_id, {})
+    return guild_balances.get(str(user_id), 0)
 
-def change_balance(user_id, amount):
-    """Change a user's balance by a given amount. Prevents negative balances."""
+def change_balance(user_id, amount, guild_id):
+    """Change a user's balance by a given amount in a specific server. Prevents negative balances."""
     user_id = str(user_id)
-    balances[user_id] = balances.get(user_id, 0) + amount
-    if balances[user_id] < 0:
-        balances[user_id] = 0
+    
+    # Initialize guild balances if not exists
+    if guild_id not in balances:
+        balances[guild_id] = {}
+    
+    # Update balance
+    balances[guild_id][user_id] = balances[guild_id].get(user_id, 0) + amount
+    if balances[guild_id][user_id] < 0:
+        balances[guild_id][user_id] = 0
     save_balances()
 
 def load_xp():
@@ -680,19 +773,53 @@ def load_bca_countdowns():
             data = json.load(f)
             # Convert ISO strings back to timezone-aware datetime objects
             est = pytz.timezone('US/Eastern')
-            for event_name, event_data in data.items():
-                try:
-                    # Try to parse as timezone-aware datetime first
-                    end_time = datetime.fromisoformat(event_data["end_time"])
-                    # If it's timezone-naive, localize it to EST
-                    if end_time.tzinfo is None:
-                        end_time = est.localize(end_time)
-                    event_data["end_time"] = end_time
-                except (ValueError, TypeError) as e:
-                    print(f"Warning: Could not parse countdown time for '{event_name}': {e}")
-                    # Skip this countdown if we can't parse it
-                    continue
-            return data
+            result = {}
+            
+            # Handle both old format (global) and new format (per-server)
+            if data and isinstance(list(data.values())[0], dict) and "end_time" in list(data.values())[0]:
+                # Old format - migrate to new format under a default guild
+                print("Migrating old countdown format to server-specific format")
+                result["global"] = {}
+                for event_name, event_data in data.items():
+                    try:
+                        end_time = datetime.fromisoformat(event_data["end_time"])
+                        if end_time.tzinfo is None:
+                            end_time = est.localize(end_time)
+                        result["global"][event_name] = {
+                            "end_time": end_time,
+                            "description": event_data["description"]
+                        }
+                    except (ValueError, TypeError) as e:
+                        print(f"Warning: Could not parse countdown time for '{event_name}': {e}")
+                        continue
+            else:
+                # New format - per server
+                for guild_id, guild_countdowns in data.items():
+                    # Handle both string guild IDs and 'global' key
+                    if guild_id == "global":
+                        result["global"] = {}
+                        guild_key = "global"
+                    else:
+                        try:
+                            guild_key = int(guild_id)
+                            result[guild_key] = {}
+                        except ValueError:
+                            print(f"Warning: Invalid guild_id '{guild_id}', skipping")
+                            continue
+                    
+                    for event_name, event_data in guild_countdowns.items():
+                        try:
+                            end_time = datetime.fromisoformat(event_data["end_time"])
+                            if end_time.tzinfo is None:
+                                end_time = est.localize(end_time)
+                            result[int(guild_id)][event_name] = {
+                                "end_time": end_time,
+                                "description": event_data["description"]
+                            }
+                        except (ValueError, TypeError) as e:
+                            print(f"Warning: Could not parse countdown time for '{event_name}' in guild {guild_id}: {e}")
+                            continue
+            return result
     except FileNotFoundError:
         return {}
     except Exception as e:
@@ -703,19 +830,62 @@ def save_bca_countdowns(countdowns):
     with open(BCA_COUNTDOWNS_FILE, "w") as f:
         # Convert datetime objects to ISO strings for JSON serialization
         data = {}
-        for event_name, event_data in countdowns.items():
-            end_time = event_data["end_time"]
-            # Handle both timezone-aware and naive datetime objects
-            if hasattr(end_time, 'isoformat'):
-                end_time_str = end_time.isoformat()
-            else:
-                end_time_str = str(end_time)
-            
-            data[event_name] = {
-                "end_time": end_time_str,
-                "description": event_data["description"]
-            }
+        for guild_id, guild_countdowns in countdowns.items():
+            data[str(guild_id)] = {}
+            for event_name, event_data in guild_countdowns.items():
+                end_time = event_data["end_time"]
+                # Handle both timezone-aware and naive datetime objects
+                if hasattr(end_time, 'isoformat'):
+                    end_time_str = end_time.isoformat()
+                else:
+                    end_time_str = str(end_time)
+                
+                data[str(guild_id)][event_name] = {
+                    "end_time": end_time_str,
+                    "description": event_data["description"]
+                }
         json.dump(data, f, indent=2)
+
+def load_server_configs():
+    """Load server-specific configurations"""
+    try:
+        with open(SERVER_CONFIGS_FILE, "r") as f:
+            data = json.load(f)
+            # Convert string keys back to integers
+            result = {}
+            for guild_id, config in data.items():
+                result[int(guild_id)] = config
+            return result
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print(f"Error loading server configs: {e}")
+        return {}
+
+def save_server_configs(configs):
+    """Save server-specific configurations"""
+    try:
+        with open(SERVER_CONFIGS_FILE, "w") as f:
+            # Convert integer keys to strings for JSON
+            data = {}
+            for guild_id, config in configs.items():
+                data[str(guild_id)] = config
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"Error saving server configs: {e}")
+
+def get_server_config(guild_id, key, default=None):
+    """Get a specific config value for a server"""
+    global SERVER_CONFIGS
+    return SERVER_CONFIGS.get(guild_id, {}).get(key, default)
+
+def set_server_config(guild_id, key, value):
+    """Set a specific config value for a server"""
+    global SERVER_CONFIGS
+    if guild_id not in SERVER_CONFIGS:
+        SERVER_CONFIGS[guild_id] = {}
+    SERVER_CONFIGS[guild_id][key] = value
+    save_server_configs(SERVER_CONFIGS)
 
 # Example usage in commands:
 # await ctx.send(embed=nova_embed("TITLE", "description"))
@@ -887,6 +1057,20 @@ async def on_ready():
     load_xp()
     load_birthdays()
     load_afk()
+    
+    # Start the live countdown update loop using bot.loop
+    try:
+        bot.loop.create_task(countdown_update_loop())
+        print("🚀 LIVE COUNTDOWN UPDATE LOOP STARTED SUCCESSFULLY!")
+        print("🔴 Countdown messages will now auto-edit every second!")
+    except Exception as e:
+        print(f"❌ Error starting countdown update loop: {e}")
+        # Fallback method
+        try:
+            asyncio.ensure_future(countdown_update_loop())
+            print("🚀 FALLBACK: Live countdown loop started with ensure_future")
+        except Exception as e2:
+            print(f"❌ Fallback failed: {e2}")
     
     # Debug: Show loaded config values
     print(f"DEBUG: CHAT_LOGS_CHANNEL_ID = {CHAT_LOGS_CHANNEL_ID}")
@@ -1842,35 +2026,39 @@ async def help_slash(interaction: discord.Interaction, category: str = None):
 @bot.command()
 async def balance(ctx):
     """Check your dOLLARIANAS balance."""
-    bal = get_balance(ctx.author.id)
-    await ctx.send(f"{ctx.author.mention}, you have {bal} {CURRENCY_NAME}.")
+    guild_id = ctx.guild.id
+    bal = get_balance(ctx.author.id, guild_id)
+    await ctx.send(embed=nova_embed("bALANCE", f"{ctx.author.mention}, yOU hAVE {bal} {CURRENCY_NAME} iN tHIS sERVER."))
 
 # Slash command version of balance
 @bot.tree.command(name="balance", description="Check your dOLLARIANAS balance (slash command)")
 async def balance_slash(interaction: discord.Interaction):
-    bal = get_balance(interaction.user.id)
-    await interaction.response.send_message(f"{interaction.user.mention}, you have {bal} {CURRENCY_NAME}.")
+    guild_id = interaction.guild.id
+    bal = get_balance(interaction.user.id, guild_id)
+    await interaction.response.send_message(embed=nova_embed("bALANCE", f"{interaction.user.mention}, yOU hAVE {bal} {CURRENCY_NAME} iN tHIS sERVER."))
 
 @bot.command()
 async def beg(ctx):
     now = datetime.now(dt_timezone.utc)
     user_id = ctx.author.id
+    guild_id = ctx.guild.id
     last = beg_cooldowns.get(user_id)
     if last and now - last < timedelta(minutes=10):
         rem = timedelta(minutes=10) - (now - last)
-        await ctx.send(f"{ctx.author.mention}, you can beg again in {str(rem).split('.')[0]}.")
+        await ctx.send(embed=nova_embed("bEG", f"{ctx.author.mention}, yOU cAN bEG aGAIN iN {str(rem).split('.')[0]}."))
         return
     beg_cooldowns[user_id] = now
     if random.random() < 0.5:
-        await ctx.send(f"{ctx.author.mention}, no one gave you anything this time.")
+        await ctx.send(embed=nova_embed("bEG", f"{ctx.author.mention}, nO oNE gAVE yOU aNYTHING tHIS tIME."))
     else:
         amount = random.randint(1, 20)
-        change_balance(user_id, amount)
-        await ctx.send(f"{ctx.author.mention}, you begged and got {amount} {CURRENCY_NAME}!")
+        change_balance(user_id, amount, guild_id)
+        await ctx.send(embed=nova_embed("bEG", f"{ctx.author.mention}, yOU bEGGED aND gOT {amount} {CURRENCY_NAME}!"))
 
 @bot.command()
 async def daily(ctx):
     user_id = str(ctx.author.id)
+    guild_id = ctx.guild.id
     now = datetime.utcnow()
     last = daily_cooldowns.get(user_id)
     if last and (now - last).total_seconds() < 86400:
@@ -1880,12 +2068,13 @@ async def daily(ctx):
         await ctx.send(embed=nova_embed("dAILY", f"yOU aLREADY cLAIMED yOUR dAILY! tRY aGAIN iN {hours}h {mins}m."))
         return
     daily_cooldowns[user_id] = now
-    change_balance(ctx.author.id, 100)
+    change_balance(ctx.author.id, 100, guild_id)
     await ctx.send(embed=nova_embed("dAILY", f"yOU cLAIMED yOUR dAILY 100 {CURRENCY_NAME}!"))
 
 @bot.tree.command(name="daily", description="Claim daily reward (24h cooldown)")
 async def daily_slash(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
+    guild_id = interaction.guild.id
     now = datetime.utcnow()
     last = daily_cooldowns.get(user_id)
     if last and (now - last).total_seconds() < 86400:
@@ -1895,7 +2084,7 @@ async def daily_slash(interaction: discord.Interaction):
         await interaction.response.send_message(embed=nova_embed("dAILY", f"yOU aLREADY cLAIMED yOUR dAILY! tRY aGAIN iN {hours}h {mins}m."), ephemeral=True)
         return
     daily_cooldowns[user_id] = now
-    change_balance(interaction.user.id, 100)
+    change_balance(interaction.user.id, 100, guild_id)
     await interaction.response.send_message(embed=nova_embed("dAILY", f"yOU cLAIMED yOUR dAILY 100 {CURRENCY_NAME}!"))
 
 @bot.command()
@@ -5104,15 +5293,18 @@ async def setchatlogs(ctx, channel: discord.TextChannel = None):
     if not has_mod_or_admin(ctx):
         await ctx.send("You don't have permission to use this command.")
         return
-    global CHAT_LOGS_CHANNEL_ID
+    
+    guild_id = ctx.guild.id
+    
     if channel is None:
-        CHAT_LOGS_CHANNEL_ID = None
-        save_config()
-        await ctx.send("Chat logs channel unset.")
+        # Remove chat logs channel for this server
+        set_server_config(guild_id, "chat_logs_channel_id", None)
+        await ctx.send(embed=nova_embed("cHAT lOGS", "cHAT lOGS cHANNEL uNSET fOR tHIS sERVER."))
         return
-    CHAT_LOGS_CHANNEL_ID = channel.id
-    save_config()
-    await ctx.send(f"Chat logs channel set to {channel.mention}.")
+    
+    # Set chat logs channel for this server
+    set_server_config(guild_id, "chat_logs_channel_id", channel.id)
+    await ctx.send(embed=nova_embed("cHAT lOGS", f"cHAT lOGS cHANNEL sET tO {channel.mention} fOR tHIS sERVER."))
 
 @bot.tree.command(name="setchatlogs", description="Set the chat logs channel for mod-only logs.")
 @app_commands.describe(channel="The channel to log deleted/edited messages")
@@ -5121,10 +5313,12 @@ async def setchatlogs_slash(interaction: discord.Interaction, channel: discord.T
     if not has_mod_or_admin(ctx):
         await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
         return
-    global CHAT_LOGS_CHANNEL_ID
-    CHAT_LOGS_CHANNEL_ID = channel.id
-    save_config()
-    await interaction.response.send_message(f"Chat logs channel set to {channel.mention}.", ephemeral=True)
+    
+    guild_id = interaction.guild.id
+    
+    # Set chat logs channel for this server
+    set_server_config(guild_id, "chat_logs_channel_id", channel.id)
+    await interaction.response.send_message(embed=nova_embed("cHAT lOGS", f"cHAT lOGS cHANNEL sET tO {channel.mention} fOR tHIS sERVER."), ephemeral=True)
 
 # Welcome/Farewell system
 WELCOME_CHANNEL_ID = None  # Set by ?setwelcome
@@ -8188,25 +8382,24 @@ async def bcavote_slash(interaction: discord.Interaction, category: str):
 
 # Countdown System
 @bot.command()
-async def addcountdown(ctx, event_name: str = None, end_time: str = None, *, description: str = None):
-    """Add a countdown for an event (mods only). Format: ?addcountdown "Event Name" "YYYY-MM-DD HH:MM" Description"""
+async def addcountdown(ctx, event_name: str = None, date: str = None, time: str = None, *, description: str = None):
+    """Add a countdown for an event (mods only). Format: ?addcountdown "Event Name" "YYYY-MM-DD" "HH:MM" "Description"""
     if not has_mod_or_admin(ctx):
         await ctx.send(embed=nova_embed("aDD cOUNTDOWN", "yOU dON'T hAVE pERMISSION!"))
         return
     
-    if not event_name or not end_time:
-        await ctx.send(embed=nova_embed("aDD cOUNTDOWN", 'Usage: ?addcountdown "Event Name" "DATE [TIME]" [Description]\n\nSupported formats:\n• "YYYY-MM-DD HH:MM" - Full date and time (2025-08-05 22:04)\n• "YYYY-MM-DD HHMM" - Date and time without colon (2025-08-05 2204)\n• "YYYY-MM-DD HH.MM" - Date and time with dot (2025-08-05 22.04)\n• "YYYY-MM-DD" - Date only (defaults to midnight)\n\nExamples:\n• ?addcountdown "BCA Voting" "2024-12-31 23:59" Voting ends soon!\n• ?addcountdown test "2025-08-05 22:04" With time\n• ?addcountdown test "2025-08-04" Simple date'))
+    if not event_name or not date:
+        await ctx.send(embed=nova_embed("aDD cOUNTDOWN", 'Usage: ?addcountdown "Event Name" "YYYY-MM-DD" "HH:MM" "Description"\n\nSupported formats:\n• Date: "YYYY-MM-DD" (e.g., "2025-08-05")\n• Time: "HH:MM" (e.g., "22:04") - Optional, defaults to "00:00"\n• Description: Any text in quotes - Optional\n\nExamples:\n• ?addcountdown "BCA Voting" "2024-12-31" "23:59" "Voting ends soon!"\n• ?addcountdown "Event Name" "2025-08-05" "22:04" "With time and description"\n• ?addcountdown "Simple Event" "2025-08-04" "00:00" "Midnight event"'))
         return
     
-    # Handle case where time got split into description due to missing quotes
-    # Check if description looks like a time (HH:MM format)
-    if description and description.strip().startswith('"') and ':' in description:
-        # Time was likely split into description, combine them
-        potential_time = description.strip().strip('"')
-        if len(potential_time) <= 5 and ':' in potential_time:  # Looks like HH:MM
-            end_time = f"{end_time} {potential_time}"
-            description = "No description provided"
-            print(f"DEBUG: Detected split time, combined to: '{end_time}'")
+    # Set default time if not provided
+    if not time:
+        time = "00:00"
+        print(f"DEBUG: No time provided, defaulting to: {time}")
+    
+    # Combine date and time
+    end_time = f"{date} {time}"
+    print(f"DEBUG: Combined datetime string: '{end_time}'")
     
     # If description is None, use a default
     if description is None:
@@ -8266,12 +8459,18 @@ async def addcountdown(ctx, event_name: str = None, end_time: str = None, *, des
         print(f"DEBUG: Test footer format: {test_footer}")
         
         global BCA_COUNTDOWNS
-        BCA_COUNTDOWNS[event_name] = {
+        guild_id = ctx.guild.id
+        
+        # Initialize guild countdowns if not exists
+        if guild_id not in BCA_COUNTDOWNS:
+            BCA_COUNTDOWNS[guild_id] = {}
+            
+        BCA_COUNTDOWNS[guild_id][event_name] = {
             "end_time": end_datetime,
-            "description": description
+            "description": description or "No description provided"
         }
         
-        print(f"DEBUG: Saving countdown data: {BCA_COUNTDOWNS}")
+        print(f"DEBUG: Saving countdown data for guild {guild_id}: {BCA_COUNTDOWNS[guild_id]}")
         try:
             save_bca_countdowns(BCA_COUNTDOWNS)
             print("DEBUG: Countdown saved successfully")
@@ -8320,23 +8519,27 @@ async def addcountdown(ctx, event_name: str = None, end_time: str = None, *, des
         print(f"DEBUG: Unexpected error in addcountdown: {e}")
         await ctx.send(embed=nova_embed("aDD cOUNTDOWN", f"aN uNEXPECTED eRROR oCCURRED: {str(e)}"))
 
-@bot.command()
+@bot.command(name="countdown")
 async def countdown(ctx, *, event_name: str = None):
     """Show countdown for an event"""
     global BCA_COUNTDOWNS
+    guild_id = ctx.guild.id
     
-    print(f"DEBUG: Countdown command called with event_name: {event_name}")
+    print(f"DEBUG: Countdown command called with event_name: {event_name} for guild {guild_id}")
     print(f"DEBUG: Current BCA_COUNTDOWNS: {BCA_COUNTDOWNS}")
     
-    if not BCA_COUNTDOWNS:
-        await ctx.send(embed=nova_embed("cOUNTDOWN", "nO cOUNTDOWNS sET uP yET!"))
+    # Get countdowns for this server
+    server_countdowns = BCA_COUNTDOWNS.get(guild_id, {})
+    
+    if not server_countdowns:
+        await ctx.send(embed=nova_embed("cOUNTDOWN", "nO cOUNTDOWNS sET uP yET fOR tHIS sERVER!"))
         return
     
     try:
         if event_name is None:
-            # Show all countdowns
+            # Show all countdowns for this server
             countdown_list = []
-            for event, data in BCA_COUNTDOWNS.items():
+            for event, data in server_countdowns.items():
                 est = pytz.timezone('US/Eastern')
                 now = datetime.now(est)
                 time_diff = data["end_time"] - now
@@ -8346,25 +8549,27 @@ async def countdown(ctx, *, event_name: str = None):
                 else:
                     days = time_diff.days
                     hours, remainder = divmod(time_diff.seconds, 3600)
-                    minutes, _ = divmod(remainder, 60)
-                    time_str = f"{days}d {hours}h {minutes}m"
+                    minutes, seconds = divmod(remainder, 60)
+                    # Live countdown with seconds
+                    time_str = f"{days}d {hours}h {minutes}m {seconds}s"
                 
                 countdown_list.append(f"**{event}** - {time_str}")
             
             embed = discord.Embed(
-                title="⏰ aLL cOUNTDOWNS",
+                title="⏰ aLL cOUNTDOWNS (lIVE)",
                 description="\n".join(countdown_list),
                 color=0xff69b4
             )
+            embed.set_footer(text="🔴 lIVE cOUNTDOWN - rEFRESH fOR uPDATES")
             await ctx.send(embed=embed)
         else:
             # Show specific countdown
-            if event_name not in BCA_COUNTDOWNS:
-                available_events = list(BCA_COUNTDOWNS.keys())
+            if event_name not in server_countdowns:
+                available_events = list(server_countdowns.keys())
                 await ctx.send(embed=nova_embed("cOUNTDOWN", f"eVENT '{event_name}' nOT fOUND!\n\naVAILABLE eVENTS: {', '.join(available_events) if available_events else 'None'}"))
                 return
         
-        event_data = BCA_COUNTDOWNS[event_name]
+        event_data = server_countdowns[event_name]
         est = pytz.timezone('US/Eastern')
         now = datetime.now(est)
         time_diff = event_data["end_time"] - now
@@ -8379,13 +8584,18 @@ async def countdown(ctx, *, event_name: str = None):
             time_str = f"{days} days, {hours} hours, {minutes} minutes, {seconds} seconds"
             color = 0xff69b4
         
-        embed = discord.Embed(
-            title=f"⏰ {event_name}",
-            description=f"{event_data['description']}\n\n⏱️ **tIME rEMAINING:** {time_str}",
-            color=color
-        )
-        embed.set_footer(text=f"eNDS: {event_data['end_time'].strftime('%Y-%m-%d at %H:%M')}")
-        await ctx.send(embed=embed)
+        description = f"{event_data['description']}\n\n⏱️ **tIME rEMAINING:** **{time_str}**"
+        message = await ctx.send(embed=nova_embed(f"⏰ {event_name}", description))
+        
+        # Track this message for live updates (only for specific countdowns, not "all" view)
+        if time_diff.total_seconds() > 0:  # Only track if not ended
+            global active_countdown_messages
+            active_countdown_messages[message.id] = {
+                'guild_id': guild_id,
+                'channel_id': ctx.channel.id,
+                'event_name': event_name,
+                'message_obj': message
+            }
             
     except Exception as e:
         print(f"ERROR in countdown command: {e}")
@@ -8396,19 +8606,23 @@ async def countdown(ctx, *, event_name: str = None):
 async def countdown_slash(interaction: discord.Interaction, event_name: str = None):
     """Show countdown for an event (slash command version)"""
     global BCA_COUNTDOWNS
+    guild_id = interaction.guild.id
     
-    print(f"DEBUG: Countdown slash command called with event_name: {event_name}")
+    print(f"DEBUG: Countdown slash command called with event_name: {event_name} for guild {guild_id}")
     print(f"DEBUG: Current BCA_COUNTDOWNS: {BCA_COUNTDOWNS}")
     
-    if not BCA_COUNTDOWNS:
-        await interaction.response.send_message(embed=nova_embed("cOUNTDOWN", "nO cOUNTDOWNS sET uP yET!"))
+    # Get countdowns for this server
+    server_countdowns = BCA_COUNTDOWNS.get(guild_id, {})
+    
+    if not server_countdowns:
+        await interaction.response.send_message(embed=nova_embed("cOUNTDOWN", "nO cOUNTDOWNS sET uP yET fOR tHIS sERVER!"))
         return
     
     try:
         if event_name is None:
-            # Show all countdowns
+            # Show all countdowns for this server
             countdown_list = []
-            for event, data in BCA_COUNTDOWNS.items():
+            for event, data in server_countdowns.items():
                 est = pytz.timezone('US/Eastern')
                 now = datetime.now(est)
                 time_diff = data["end_time"] - now
@@ -8418,25 +8632,27 @@ async def countdown_slash(interaction: discord.Interaction, event_name: str = No
                 else:
                     days = time_diff.days
                     hours, remainder = divmod(time_diff.seconds, 3600)
-                    minutes, _ = divmod(remainder, 60)
-                    time_str = f"{days}d {hours}h {minutes}m"
+                    minutes, seconds = divmod(remainder, 60)
+                    # Live countdown with seconds
+                    time_str = f"{days}d {hours}h {minutes}m {seconds}s"
                 
                 countdown_list.append(f"**{event}** - {time_str}")
             
             embed = discord.Embed(
-                title="⏰ aLL cOUNTDOWNS",
+                title="⏰ aLL cOUNTDOWNS (lIVE)",
                 description="\n".join(countdown_list),
                 color=0xff69b4
             )
+            embed.set_footer(text="🔴 lIVE cOUNTDOWN - rEFRESH fOR uPDATES")
             await interaction.response.send_message(embed=embed)
         else:
             # Show specific countdown
-            if event_name not in BCA_COUNTDOWNS:
-                available_events = list(BCA_COUNTDOWNS.keys())
+            if event_name not in server_countdowns:
+                available_events = list(server_countdowns.keys())
                 await interaction.response.send_message(embed=nova_embed("cOUNTDOWN", f"eVENT '{event_name}' nOT fOUND!\n\naVAILABLE eVENTS: {', '.join(available_events) if available_events else 'None'}"))
                 return
         
-            event_data = BCA_COUNTDOWNS[event_name]
+            event_data = server_countdowns[event_name]
             est = pytz.timezone('US/Eastern')
             now = datetime.now(est)
             time_diff = event_data["end_time"] - now
@@ -8451,14 +8667,20 @@ async def countdown_slash(interaction: discord.Interaction, event_name: str = No
                 time_str = f"{days} days, {hours} hours, {minutes} minutes, {seconds} seconds"
                 color = 0xff69b4
             
-            embed = discord.Embed(
-                title=f"⏰ {event_name}",
-                description=f"{event_data['description']}\n\n⏱️ **tIME rEMAINING:** {time_str}",
-                color=color
-            )
-            embed.set_footer(text=f"eNDS: {event_data['end_time'].strftime('%Y-%m-%d at %H:%M')}")
-            await interaction.response.send_message(embed=embed)
+            description = f"{event_data['description']}\n\n⏱️ **tIME rEMAINING:** **{time_str}**"
+            await interaction.response.send_message(embed=nova_embed(f"⏰ {event_name}", description))
             
+            # Track this message for live updates (only for specific countdowns, not "all" view)
+            if time_diff.total_seconds() > 0:  # Only track if not ended
+                message = await interaction.original_response()
+                global active_countdown_messages
+                active_countdown_messages[message.id] = {
+                    'guild_id': guild_id,
+                    'channel_id': interaction.channel.id,
+                    'event_name': event_name,
+                    'message_obj': message
+                }
+                
     except Exception as e:
         print(f"ERROR in countdown slash command: {e}")
         await interaction.response.send_message(embed=nova_embed("cOUNTDOWN", "aN eRROR oCCURRED wHILE sHOWING cOUNTDOWN!"))
@@ -9239,6 +9461,22 @@ announcement_tracker = {
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
+    
+    # Load all data
+    load_config()
+    load_balances()
+    load_xp()
+    load_birthdays()
+    load_afk()
+    
+    # Start the live countdown update loop - THIS IS THE CRITICAL PART!
+    try:
+        bot.loop.create_task(countdown_update_loop())
+        print("🚀 LIVE COUNTDOWN UPDATE LOOP STARTED SUCCESSFULLY!")
+        print("🔴 Countdown messages will now auto-edit every second!")
+    except Exception as e:
+        print(f"❌ Error starting countdown update loop: {e}")
+    
     # Start the deadline monitoring task
     deadline_monitor.start()
 
