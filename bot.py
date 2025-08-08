@@ -51,6 +51,7 @@ MESSAGE_ACTIVITY_FILE = "message_activity.json"
 BCA_NOMINATIONS_FILE = "bca_nominations.json"
 BCA_VOTES_FILE = "bca_votes.json"
 BCA_CATEGORIES_FILE = "bca_categories.json"
+BCA_CHANGES_FILE = "bca_changes.json"
 BCA_COUNTDOWNS_FILE = "bca_countdowns.json"
 SERVER_CONFIGS_FILE = "server_configs.json"
 
@@ -194,9 +195,10 @@ BCA_NOMINATIONS_CHANNEL_ID = None  # Set by ?setbcanominations
 BCA_NOMINATIONS_LOGS_CHANNEL_ID = None  # Set by ?setbcanominationslogs
 BCA_VOTING_CHANNEL_ID = None  # Set by ?setbcavoting
 BCA_VOTING_LOGS_CHANNEL_ID = None  # Set by ?setbcavotinglogs
-BCA_CATEGORIES = {}  # category_name: {"allow_self_nomination": bool}
-BCA_NOMINATIONS = {}  # category: {user_id: {"nominee": user_id, "nominator": user_id}}
-BCA_VOTES = {}  # category: {user_id: nominee_id}
+BCA_CATEGORIES = {}  # guild_id: {category_name: {"allow_self_nomination": bool}}
+BCA_NOMINATIONS = {}  # guild_id: {category: {user_id: {"nominee": user_id, "nominator": user_id}}}
+BCA_VOTES = {}  # guild_id: {category: {user_id: nominee_id}}
+BCA_CHANGES = {}  # guild_id: {user_id: {"nomination_changed": bool, "vote_changed": bool}}
 BCA_COUNTDOWNS = {}  # guild_id: {event_name: {"end_time": datetime, "description": str}}
 SERVER_CONFIGS = {}  # guild_id: {"chat_logs": channel_id, "server_logs": channel_id, etc.}
 BCA_NOMINATION_DEADLINE = None  # datetime when nominations close
@@ -365,6 +367,7 @@ def load_config():
             # Load server prefixes (convert string keys to int)
             prefix_data = config.get("server_prefixes", {})
             SERVER_PREFIXES = {int(guild_id): prefix for guild_id, prefix in prefix_data.items()}
+            # Legacy global channels (kept for backward compatibility)
             CHAT_LOGS_CHANNEL_ID = config.get("chat_logs_channel_id")
             RULES_CHANNEL_ID = config.get("rules_channel_id")
             WELCOME_CHANNEL_ID = config.get("welcome_channel_id")
@@ -388,6 +391,7 @@ def load_config():
             BCA_CATEGORIES = load_bca_categories()
             BCA_NOMINATIONS = load_bca_nominations()
             BCA_VOTES = load_bca_votes()
+            BCA_CHANGES = load_bca_changes()
             BCA_COUNTDOWNS = load_bca_countdowns()
             SERVER_CONFIGS = load_server_configs()
             # Load BCA deadlines
@@ -766,6 +770,17 @@ def load_bca_votes():
 def save_bca_votes(votes):
     with open(BCA_VOTES_FILE, "w") as f:
         json.dump(votes, f, indent=2)
+
+def load_bca_changes():
+    try:
+        with open(BCA_CHANGES_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_bca_changes(changes):
+    with open(BCA_CHANGES_FILE, "w") as f:
+        json.dump(changes, f, indent=2)
 
 def load_bca_countdowns():
     try:
@@ -1307,16 +1322,22 @@ async def on_message(message):
             except discord.errors.Forbidden:
                 pass  # Bot doesn't have permission to delete
     
-    # Auto-reactions for trigger words
-    for trigger_word, emoji in AUTO_REACTIONS.items():
-        if trigger_word in message_lower:
-            try:
-                await message.add_reaction(emoji)
-            except discord.errors.HTTPException:
-                pass  # Emoji not found or other error
+    # Auto-reactions (server-specific)
+    guild_id = str(message.guild.id) if message.guild else None
+    if guild_id and guild_id in AUTO_REACTIONS:
+        for trigger_word, emoji in AUTO_REACTIONS[guild_id].items():
+            if trigger_word in message.content.lower():
+                try:
+                    await message.add_reaction(emoji)
+                except discord.HTTPException:
+                    pass  # Ignore failed reactions
     
     # React with cute Nova emoji when someone mentions "Nova" (fallback)
-    if "nova" in message_lower and "nova" not in AUTO_REACTIONS:
+    nova_reaction_exists = False
+    if guild_id and guild_id in AUTO_REACTIONS:
+        nova_reaction_exists = "nova" in AUTO_REACTIONS[guild_id]
+    
+    if "nova" in message_lower and not nova_reaction_exists:
         try:
             await message.add_reaction("<:cute_nova:1398830405691637800>")
         except discord.errors.HTTPException:
@@ -1710,7 +1731,7 @@ HELP_CATEGORIES = {
     "🎵 Music & Media": [
         ("?spotify @user", "Show Spotify status", "Display what someone is listening to"),
         ("?fm @user", "Show Spotify status (alias)", "Same as ?spotify command"),
-        ("?lyrics <song>", "Get song lyrics", "Search for and display song lyrics"),
+
         ("?playlistshow", "Show playlist info", "Display current playlist information"),
         ("?setautoplay <on/off>", "Toggle autoplay (Admin)", "Enable/disable music autoplay")
     ],
@@ -1782,6 +1803,7 @@ HELP_CATEGORIES = {
         ("?setbcavoting #channel", "Set voting channel (Mod+)", "Where voting takes place"),
         ("?setbcavotinglogs #channel", "Set voting logs (Mod+)", "Where mods see voting activity"),
         ("?bcaaddcategory <name>", "Add award category (Mod+)", "Create new BCA category"),
+        ("?removebcacategory <name>", "Remove award category (Mod+)", "Delete BCA category and all data"),
         ("?bcatoggleself <category>", "Toggle self-nomination (Mod+)", "Allow/disallow self-nominations"),
         ("?bcacategories", "List all categories", "See categories and self-nom status"),
         ("?nominate @user <category>", "Nominate someone", "Anonymous nomination system"),
@@ -1799,10 +1821,7 @@ HELP_CATEGORIES = {
         ("?reminderlist", "List your active reminders", "See all your pending reminders"),
         ("?addcountdown \"name\" \"date\" [desc]", "Add event countdown (Mod+)", "Create countdown to important events"),
         ("?countdown [event]", "View countdowns", "See specific countdown or all countdowns"),
-        ("?timezone", "Show current timezone", "Display server's configured timezone"),
-        ("?tz", "Show current timezone (alias)", "Same as ?timezone command"),
-        ("?settimezone <tz>", "Set server timezone (Admin)", "Configure server's timezone"),
-        ("?settz <tz>", "Set server timezone (Admin)", "Same as ?settimezone command")
+        ("?settz <tz>", "Set server timezone (Admin)", "Configure server's timezone")
     ],
     "🔍 Information & Utilities": [
         ("?ping", "Check bot latency", "See bot response time"),
@@ -2162,9 +2181,10 @@ class NukeConfirmView(discord.ui.View):
                 nuked_messages_log += f"Attachments: {attachments}\n"
                 nuked_messages_log += "-" * 30 + "\n\n"
             
-            # Send the log as a file to the mod logs channel
-            if MOD_LOGS_CHANNEL_ID:
-                mod_logs_channel = self.ctx.guild.get_channel(MOD_LOGS_CHANNEL_ID)
+            # Send the log as a file to the mod logs channel (server-specific)
+            mod_logs_channel_id = get_server_config(self.ctx.guild.id, "mod_logs_channel_id")
+            if mod_logs_channel_id:
+                mod_logs_channel = self.ctx.guild.get_channel(mod_logs_channel_id)
                 if mod_logs_channel:
                     file_content = nuked_messages_log.encode('utf-8')
                     filename = f"nuked_messages_{self.ctx.channel.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -2308,8 +2328,9 @@ async def clear(ctx, amount: int = None):
             deleted_messages_log += "-" * 30 + "\n\n"
         
         # Send the log as a file to the mod logs channel
-        if MOD_LOGS_CHANNEL_ID:
-            mod_logs_channel = ctx.guild.get_channel(MOD_LOGS_CHANNEL_ID)
+        mod_logs_channel_id = get_server_config(ctx.guild.id, "mod_logs_channel_id")
+        if mod_logs_channel_id:
+            mod_logs_channel = ctx.guild.get_channel(mod_logs_channel_id)
             if mod_logs_channel:
                 file_content = deleted_messages_log.encode('utf-8')
                 filename = f"deleted_messages_{ctx.channel.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -3236,11 +3257,21 @@ async def reactionadd(ctx, trigger_word: str = None, emoji: str = None):
         return
     
     trigger_word = trigger_word.lower()
-    AUTO_REACTIONS[trigger_word] = emoji
+    guild_id = str(ctx.guild.id)
+    
+    # Make server-specific
+    if guild_id not in AUTO_REACTIONS:
+        AUTO_REACTIONS[guild_id] = {}
+    
+    AUTO_REACTIONS[guild_id][trigger_word] = emoji
+    
+    # Save to persistence
+    with open("auto_reactions.json", "w") as f:
+        json.dump(AUTO_REACTIONS, f, indent=2)
     
     await ctx.send(embed=nova_embed(
         "✅ rEACTION aDDED!",
-        f"nOVA wILL nOW rEACT wITH {emoji} wHEN sOMEONE sAYS '{trigger_word}'!"
+        f"nOVA wILL nOW rEACT wITH {emoji} wHEN sOMEONE sAYS '{trigger_word}' iN tHIS sERVER!"
     ))
 
 @bot.command()
@@ -3255,14 +3286,26 @@ async def reactionremove(ctx, trigger_word: str = None):
         return
     
     trigger_word = trigger_word.lower()
-    if trigger_word in AUTO_REACTIONS:
-        removed_emoji = AUTO_REACTIONS.pop(trigger_word)
+    guild_id = str(ctx.guild.id)
+    
+    if guild_id in AUTO_REACTIONS and trigger_word in AUTO_REACTIONS[guild_id]:
+        removed_emoji = AUTO_REACTIONS[guild_id][trigger_word]
+        del AUTO_REACTIONS[guild_id][trigger_word]
+        
+        # Clean up empty guild entries
+        if not AUTO_REACTIONS[guild_id]:
+            del AUTO_REACTIONS[guild_id]
+        
+        # Save to persistence
+        with open("auto_reactions.json", "w") as f:
+            json.dump(AUTO_REACTIONS, f, indent=2)
+        
         await ctx.send(embed=nova_embed(
-            "🗑️ rEACTION rEMOVED!",
-            f"nOVA wILL nO lONGER rEACT tO '{trigger_word}' (wAS {removed_emoji})"
+            "✅ rEACTION rEMOVED!",
+            f"nOVA wILL nO lONGER rEACT tO '{trigger_word}' iN tHIS sERVER (wAS {removed_emoji})"
         ))
     else:
-        await ctx.send(embed=nova_embed("rEACTION rEMOVE", f"nO aUTO-rEACTION fOUND fOR '{trigger_word}'"))
+        await ctx.send(embed=nova_embed("rEACTION rEMOVE", f"nO rEACTION fOUND fOR '{trigger_word}' iN tHIS sERVER"))
 
 @bot.tree.command(name="reactionremove", description="Remove auto-reaction for trigger word (admin exclusive)")
 @app_commands.describe(trigger_word="The trigger word to remove auto-reaction for")
@@ -4088,29 +4131,7 @@ async def today(ctx):
     await ctx.send(embed=embed)
 
 # Profile/About Me System
-@bot.command()
-async def aboutme(ctx, user: discord.Member = None):
-    """View someone's about me description."""
-    target_user = user or ctx.author
-    profiles = load_profiles()
-    
-    user_profile = profiles.get(str(target_user.id))
-    if not user_profile or "about_me" not in user_profile:
-        if target_user == ctx.author:
-            await ctx.send(embed=nova_embed("📝 aBOUT mE", "You haven't set an about me yet! Use ?setaboutme <description> to set one."))
-        else:
-            await ctx.send(embed=nova_embed("📝 aBOUT mE", f"{target_user.display_name} hasn't set an about me yet."))
-        return
-    
-    embed = discord.Embed(
-        title=f"📝 {target_user.display_name}'s About Me",
-        description=user_profile["about_me"],
-        color=0xff69b4
-    )
-    embed.set_thumbnail(url=target_user.display_avatar.url)
-    embed.set_footer(text=f"Set on {datetime.fromisoformat(user_profile['set_date']).strftime('%B %d, %Y')}")
-    
-    await ctx.send(embed=embed)
+
 
 # Slash commands for profiles
 @bot.tree.command(name="setaboutme", description="Set your about me description")
@@ -5132,13 +5153,13 @@ async def on_message_edit(before, after):
     
     # Chat logs for message edits - Enhanced debugging
     print(f"DEBUG: Message edited by {before.author} in {before.channel}")
-    print(f"DEBUG: CHAT_LOGS_CHANNEL_ID = {CHAT_LOGS_CHANNEL_ID}")
-    
-    if CHAT_LOGS_CHANNEL_ID:
-        guild = before.guild
-        print(f"DEBUG: Guild = {guild}")
-        if guild:
-            log_channel = guild.get_channel(CHAT_LOGS_CHANNEL_ID)
+    guild = before.guild
+    if guild:
+        chat_logs_channel_id = get_server_config(guild.id, "chat_logs_channel_id")
+        print(f"DEBUG: Server {guild.id} chat logs channel ID: {chat_logs_channel_id}")
+        
+        if chat_logs_channel_id:
+            log_channel = guild.get_channel(chat_logs_channel_id)
             print(f"DEBUG: Log channel = {log_channel}")
             if log_channel:
                 try:
@@ -5410,8 +5431,10 @@ async def setfarewell_slash(interaction: discord.Interaction, channel: discord.T
 
 @bot.event
 async def on_member_join(member):
-    if WELCOME_CHANNEL_ID:
-        channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
+    # Server-specific welcome channel
+    welcome_channel_id = get_server_config(member.guild.id, "welcome_channel_id")
+    if welcome_channel_id:
+        channel = member.guild.get_channel(welcome_channel_id)
         if channel:
             # Get member count and calculate member number
             member_count = member.guild.member_count
@@ -5421,8 +5444,9 @@ async def on_member_join(member):
             description = f"wELCOME tO tHE sERVER, {member.mention}! 💖\n\n"
             
             # Use configured rules channel or fallback message
-            if RULES_CHANNEL_ID:
-                description += f"📋 pLEASE rEAD <#{RULES_CHANNEL_ID}> tO gET sTARTED!\n"
+            rules_channel_id = get_server_config(member.guild.id, "rules_channel_id")
+            if rules_channel_id:
+                description += f"📋 pLEASE rEAD <#{rules_channel_id}> tO gET sTARTED!\n"
             else:
                 description += "📋 pLEASE cHECK tHE rULES cHANNEL tO gET sTARTED!\n"
             
@@ -5432,14 +5456,60 @@ async def on_member_join(member):
             
             embed = nova_embed("👋 wELCOME!", description)
             await channel.send(embed=embed)
+    
+    # Log to join/leave logs and central logging
+    join_leave_channel_id = get_server_config(member.guild.id, "join_leave_logs_channel_id")
+    if join_leave_channel_id:
+        log_channel = member.guild.get_channel(join_leave_channel_id)
+        if log_channel:
+            embed = discord.Embed(
+                title="👋 mEMBER jOINED",
+                description=f"**{member.display_name}** ({member.mention}) jOINED tHE sERVER",
+                color=0x00ff00,
+                timestamp=datetime.now(pytz.UTC)
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.add_field(name="aCCOUNT cREATED", value=member.created_at.strftime("%Y-%m-%d %H:%M:%S UTC"), inline=True)
+            embed.add_field(name="mEMBER cOUNT", value=str(member.guild.member_count), inline=True)
+            await log_channel.send(embed=embed)
+    
+    # Central logging
+    try:
+        await log_to_central_channel(member.guild.id, "join_leave", embed)
+    except:
+        pass
 
 @bot.event
 async def on_member_remove(member):
-    if FAREWELL_CHANNEL_ID:
-        channel = member.guild.get_channel(FAREWELL_CHANNEL_ID)
+    # Server-specific farewell channel
+    farewell_channel_id = get_server_config(member.guild.id, "farewell_channel_id")
+    if farewell_channel_id:
+        channel = member.guild.get_channel(farewell_channel_id)
         if channel:
             embed = nova_embed("👋 fAREWELL!", f"{member.display_name} hAS lEFT tHE sERVER. wE'LL mISS yOU! 😢")
             await channel.send(embed=embed)
+    
+    # Log to join/leave logs and central logging
+    join_leave_channel_id = get_server_config(member.guild.id, "join_leave_logs_channel_id")
+    if join_leave_channel_id:
+        log_channel = member.guild.get_channel(join_leave_channel_id)
+        if log_channel:
+            embed = discord.Embed(
+                title="👋 mEMBER lEFT",
+                description=f"**{member.display_name}** ({member.mention}) lEFT tHE sERVER",
+                color=0xff0000,
+                timestamp=datetime.now(pytz.UTC)
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.add_field(name="jOINED sERVER", value=member.joined_at.strftime("%Y-%m-%d %H:%M:%S UTC") if member.joined_at else "Unknown", inline=True)
+            embed.add_field(name="mEMBER cOUNT", value=str(member.guild.member_count), inline=True)
+            await log_channel.send(embed=embed)
+    
+    # Central logging
+    try:
+        await log_to_central_channel(member.guild.id, "join_leave", embed)
+    except:
+        pass
 @bot.command()
 async def imposter(ctx):
     if ctx.guild is None:
@@ -5451,9 +5521,22 @@ async def imposter(ctx):
         "mountain", "beach", "desert", "forest", "island", "volcano", "river", "ocean", "cave", "valley",
         "laptop", "phone", "keyboard", "camera", "guitar", "piano", "bicycle", "skateboard", "umbrella", "backpack",
         "dragon", "unicorn", "zombie", "robot", "pirate", "wizard", "ghost", "alien", "vampire", "mermaid",
-        "diamond", "gold", "ruby", "sapphire", "bob", "pearl", "opal", "jade", "topaz", "poyson", "chile", 
+        "diamond", "gold", "ruby", "sapphire", "bob", "pearl", "opal", "jade", "topaz", "nicki", "chile", 
     ]
-    join_msg = await ctx.send(embed=nova_embed("iMPOSTER gAME", f"rEACT wITH 🕵️ tO jOIN!\n\nyOU hAVE 30 sECONDS..."))
+    instructions_embed = discord.Embed(
+        title="🕵️ iMPOSTER gAME - hOW tO pLAY",
+        description=(
+            "**rULES:**\n"
+            "• eVERYONE gETS tHE sAME wORD eXCEPT oNE pERSON (tHE iMPOSTER)\n"
+            "• tHE iMPOSTER gETS a dIFFERENT wORD\n"
+            "• tAKE tURNS dESCRIBING yOUR wORD wITHOUT sAYING iT\n"
+            "• tRY tO fIGURE oUT wHO tHE iMPOSTER iS!\n\n"
+            "**rEACT wITH 🕵️ tO jOIN tHE gAME!**\n"
+            "yOU hAVE 30 sECONDS tO jOIN..."
+        ),
+        color=0xff69b4
+    )
+    join_msg = await ctx.send(embed=instructions_embed)
     await join_msg.add_reaction("🕵️")
     reacted_users = set()
     def check(reaction, user):
@@ -6023,6 +6106,14 @@ def save_blacklist():
     with open("blacklist.json", "w") as f:
         json.dump(list(BLACKLIST_WORDS), f)
 
+def load_auto_reactions():
+    global AUTO_REACTIONS
+    try:
+        with open("auto_reactions.json", "r") as f:
+            AUTO_REACTIONS = json.load(f)
+    except FileNotFoundError:
+        AUTO_REACTIONS = {}
+
 def load_pets():
     global PET_DATA
     try:
@@ -6091,6 +6182,7 @@ def add_infraction(user_id, infraction_type, reason, moderator):
 
 # Load all new feature data on startup
 load_blacklist()
+load_auto_reactions()
 load_pets()
 load_infractions()
 
@@ -6982,10 +7074,11 @@ async def scanhistory(ctx):
 # Helper function to log mod actions
 async def log_mod_action(guild, action, moderator, target, reason=None, duration=None):
     """Log moderation actions to mod logs channel"""
-    if not MOD_LOGS_CHANNEL_ID:
+    mod_logs_channel_id = get_server_config(guild.id, "mod_logs_channel_id")
+    if not mod_logs_channel_id:
         return
     
-    channel = guild.get_channel(MOD_LOGS_CHANNEL_ID)
+    channel = guild.get_channel(mod_logs_channel_id)
     if not channel:
         return
     
@@ -7077,7 +7170,7 @@ async def on_member_remove(member):
         if channel:
             embed = nova_embed(
                 "👋 gOODBYE!",
-                f"{member.display_name} hAS lEFT tHE sERVER. wE'LL mISS yOU! 💔"
+                f"{member.display_name} hAS lEFT tHE sERVER. pAYOLA."
             )
             await channel.send(embed=embed)
     
@@ -7115,15 +7208,17 @@ async def on_member_remove(member):
 @bot.event
 async def on_member_update(before, after):
     """Log member profile changes"""
+    # Use server-specific server logs channel
+    server_logs_channel_id = get_server_config(before.guild.id, "server_logs_channel_id")
     print(f"DEBUG: Member update event triggered for {after.display_name}")
-    print(f"DEBUG: SERVER_LOGS_CHANNEL_ID = {SERVER_LOGS_CHANNEL_ID}")
+    print(f"DEBUG: Server {before.guild.id} server logs channel ID: {server_logs_channel_id}")
     
-    if not SERVER_LOGS_CHANNEL_ID:
-        print("DEBUG: No server logs channel configured")
+    if not server_logs_channel_id:
+        print("DEBUG: No server logs channel configured for this server")
         return
     
     try:
-        channel = before.guild.get_channel(SERVER_LOGS_CHANNEL_ID)
+        channel = before.guild.get_channel(server_logs_channel_id)
         if not channel:
             print(f"DEBUG: Could not find channel with ID {SERVER_LOGS_CHANNEL_ID}")
             return
@@ -7853,6 +7948,38 @@ async def bcacategories(ctx):
     await ctx.send(embed=embed)
 
 @bot.command()
+async def removebcacategory(ctx, *, category_name: str = None):
+    """Remove a BCA category (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("bCA rEMOVE cATEGORY", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    if category_name is None:
+        await ctx.send(embed=nova_embed("bCA rEMOVE cATEGORY", "Usage: ?removebcacategory <category name>"))
+        return
+    
+    global BCA_CATEGORIES, BCA_NOMINATIONS, BCA_VOTES
+    category_name = category_name.lower()
+    
+    if category_name not in BCA_CATEGORIES:
+        await ctx.send(embed=nova_embed("bCA rEMOVE cATEGORY", f"cATEGORY '{category_name}' dOESN'T eXIST!"))
+        return
+    
+    # Remove category from all data structures
+    del BCA_CATEGORIES[category_name]
+    if category_name in BCA_NOMINATIONS:
+        del BCA_NOMINATIONS[category_name]
+    if category_name in BCA_VOTES:
+        del BCA_VOTES[category_name]
+    
+    # Save all changes
+    save_bca_categories(BCA_CATEGORIES)
+    save_bca_nominations(BCA_NOMINATIONS)
+    save_bca_votes(BCA_VOTES)
+    
+    await ctx.send(embed=nova_embed("bCA rEMOVE cATEGORY", f"🗑️ rEMOVED cATEGORY: {category_name.title()}\n\naLL nOMINATIONS aND vOTES fOR tHIS cATEGORY hAVE bEEN dELETED!"))
+
+@bot.command()
 async def resetnominations(ctx, *, category: str = None):
     """Reset nominations for a category or all categories (mods only)"""
     if not has_mod_or_admin(ctx):
@@ -8188,6 +8315,152 @@ async def nominate_slash(interaction: discord.Interaction, nominee: discord.Memb
                 embed.set_thumbnail(url=interaction.user.avatar.url)
             
             await logs_channel.send(embed=embed)
+
+@bot.tree.command(name="changenomination", description="Change your nomination for a BCA category (ONE TIME ONLY)")
+@app_commands.describe(nominee="User to nominate", category="BCA category name")
+async def slash_changenomination(interaction: discord.Interaction, nominee: discord.Member, category: str):
+    global BCA_CATEGORIES, BCA_NOMINATIONS, BCA_CHANGES
+    guild_id = str(interaction.guild.id)
+    user_id = str(interaction.user.id)
+    category = category.lower()
+    
+    # Initialize server data if needed
+    if guild_id not in BCA_CATEGORIES:
+        BCA_CATEGORIES[guild_id] = {}
+    if guild_id not in BCA_NOMINATIONS:
+        BCA_NOMINATIONS[guild_id] = {}
+    if guild_id not in BCA_CHANGES:
+        BCA_CHANGES[guild_id] = {}
+    if user_id not in BCA_CHANGES[guild_id]:
+        BCA_CHANGES[guild_id][user_id] = {"nomination_changed": False, "vote_changed": False}
+    
+    # Check if user already used their one change
+    if BCA_CHANGES[guild_id][user_id]["nomination_changed"]:
+        await interaction.response.send_message(embed=nova_embed("cHANGE nOMINATION", "❌ yOU hAVE aLREADY uSED yOUR oNE nOMINATION cHANGE!"), ephemeral=True)
+        return
+    
+    # Check if nominations are still open
+    if BCA_NOMINATION_DEADLINE and datetime.now(pytz.UTC) > BCA_NOMINATION_DEADLINE:
+        est = pytz.timezone('US/Eastern')
+        deadline_est = BCA_NOMINATION_DEADLINE.astimezone(est)
+        await interaction.response.send_message(embed=nova_embed("cHANGE nOMINATION", f"nOMINATIONS hAVE cLOSED!\n\nDeadline was: {deadline_est.strftime('%Y-%m-%d at %H:%M EST')}"), ephemeral=True)
+        return
+    
+    # Check if category exists
+    if category not in BCA_CATEGORIES[guild_id]:
+        await interaction.response.send_message(embed=nova_embed("cHANGE nOMINATION", f"cATEGORY '{category}' dOESN'T eXIST!"), ephemeral=True)
+        return
+    
+    # Check if user has an existing nomination to change
+    if category not in BCA_NOMINATIONS[guild_id] or user_id not in BCA_NOMINATIONS[guild_id][category]:
+        await interaction.response.send_message(embed=nova_embed("cHANGE nOMINATION", f"yOU hAVEN'T nOMINATED aNYONE fOR '{category}' yET!"), ephemeral=True)
+        return
+    
+    # Check self-nomination rules
+    if nominee == interaction.user and not BCA_CATEGORIES[guild_id][category]["allow_self_nomination"]:
+        await interaction.response.send_message(embed=nova_embed("cHANGE nOMINATION", f"sELF-nOMINATION iS nOT aLLOWED fOR '{category}'!"), ephemeral=True)
+        return
+    
+    # Get old nominee info
+    old_nominee_id = BCA_NOMINATIONS[guild_id][category][user_id]["nominee"]
+    old_nominee = interaction.guild.get_member(int(old_nominee_id))
+    old_nominee_name = old_nominee.display_name if old_nominee else "Unknown User"
+    
+    # Update nomination and mark as changed
+    BCA_NOMINATIONS[guild_id][category][user_id] = {
+        "nominee": str(nominee.id),
+        "nominator": user_id
+    }
+    BCA_CHANGES[guild_id][user_id]["nomination_changed"] = True
+    
+    # Save changes
+    save_bca_nominations(BCA_NOMINATIONS)
+    save_bca_changes(BCA_CHANGES)
+    
+    # Log to nominations logs channel (anonymous)
+    if BCA_NOMINATIONS_LOGS_CHANNEL_ID:
+        logs_channel = bot.get_channel(BCA_NOMINATIONS_LOGS_CHANNEL_ID)
+        if logs_channel:
+            embed = discord.Embed(
+                title="📝 nOMINATION cHANGED",
+                description=f"**cATEGORY:** {category.title()}\n**fROM:** {old_nominee_name}\n**tO:** {nominee.display_name}\n\n*aNONYMOUS cHANGE*",
+                color=0xff69b4,
+                timestamp=datetime.now(pytz.UTC)
+            )
+            embed.set_footer(text="oNE-tIME cHANGE uSED")
+            
+            await logs_channel.send(embed=embed)
+    
+    await interaction.response.send_message(embed=nova_embed("cHANGE nOMINATION", f"⚠️ **oNE-tIME cHANGE uSED!**\n\ncHANGED nOMINATION fOR '{category.title()}':  \n• fROM: {old_nominee_name}\n• tO: {nominee.display_name}\n\n❌ yOU cANNOT cHANGE tHIS nOMINATION aGAIN!"), ephemeral=True)
+
+@bot.tree.command(name="changevote", description="Change your vote for a BCA category (ONE TIME ONLY)")
+@app_commands.describe(category="BCA category name", nominee="User to vote for")
+async def slash_changevote(interaction: discord.Interaction, category: str, nominee: discord.Member):
+    global BCA_CATEGORIES, BCA_VOTES, BCA_CHANGES
+    guild_id = str(interaction.guild.id)
+    user_id = str(interaction.user.id)
+    category = category.lower()
+    
+    # Initialize server data if needed
+    if guild_id not in BCA_CATEGORIES:
+        BCA_CATEGORIES[guild_id] = {}
+    if guild_id not in BCA_VOTES:
+        BCA_VOTES[guild_id] = {}
+    if guild_id not in BCA_CHANGES:
+        BCA_CHANGES[guild_id] = {}
+    if user_id not in BCA_CHANGES[guild_id]:
+        BCA_CHANGES[guild_id][user_id] = {"nomination_changed": False, "vote_changed": False}
+    
+    # Check if user already used their one change
+    if BCA_CHANGES[guild_id][user_id]["vote_changed"]:
+        await interaction.response.send_message(embed=nova_embed("cHANGE vOTE", "❌ yOU hAVE aLREADY uSED yOUR oNE vOTE cHANGE!"), ephemeral=True)
+        return
+    
+    # Check if voting is still open
+    if BCA_VOTING_DEADLINE and datetime.now(pytz.UTC) > BCA_VOTING_DEADLINE:
+        est = pytz.timezone('US/Eastern')
+        deadline_est = BCA_VOTING_DEADLINE.astimezone(est)
+        await interaction.response.send_message(embed=nova_embed("cHANGE vOTE", f"vOTING hAS cLOSED!\n\nDeadline was: {deadline_est.strftime('%Y-%m-%d at %H:%M EST')}"), ephemeral=True)
+        return
+    
+    # Check if category exists
+    if category not in BCA_CATEGORIES[guild_id]:
+        await interaction.response.send_message(embed=nova_embed("cHANGE vOTE", f"cATEGORY '{category}' dOESN'T eXIST!"), ephemeral=True)
+        return
+    
+    # Check if user has an existing vote to change
+    if category not in BCA_VOTES[guild_id] or user_id not in BCA_VOTES[guild_id][category]:
+        await interaction.response.send_message(embed=nova_embed("cHANGE vOTE", f"yOU hAVEN'T vOTED fOR aNYONE iN '{category}' yET!"), ephemeral=True)
+        return
+    
+    # Get old vote info
+    old_vote_id = BCA_VOTES[guild_id][category][user_id]
+    old_nominee = interaction.guild.get_member(int(old_vote_id))
+    old_nominee_name = old_nominee.display_name if old_nominee else "Unknown User"
+    
+    # Update vote and mark as changed
+    BCA_VOTES[guild_id][category][user_id] = str(nominee.id)
+    BCA_CHANGES[guild_id][user_id]["vote_changed"] = True
+    
+    # Save changes
+    save_bca_votes(BCA_VOTES)
+    save_bca_changes(BCA_CHANGES)
+    
+    # Log to voting logs channel (anonymous)
+    if BCA_VOTING_LOGS_CHANNEL_ID:
+        logs_channel = bot.get_channel(BCA_VOTING_LOGS_CHANNEL_ID)
+        if logs_channel:
+            embed = discord.Embed(
+                title="🗳️ vOTE cHANGED",
+                description=f"**cATEGORY:** {category.title()}\n**fROM:** {old_nominee_name}\n**tO:** {nominee.display_name}\n\n*aNONYMOUS cHANGE*",
+                color=0xff69b4,
+                timestamp=datetime.now(pytz.UTC)
+            )
+            embed.set_footer(text="oNE-tIME cHANGE uSED")
+            
+            await logs_channel.send(embed=embed)
+    
+    await interaction.response.send_message(embed=nova_embed("cHANGE vOTE", f"⚠️ **oNE-tIME cHANGE uSED!**\n\ncHANGED vOTE fOR '{category.title()}':  \n• fROM: {old_nominee_name}\n• tO: {nominee.display_name}\n\n❌ yOU cANNOT cHANGE tHIS vOTE aGAIN!"), ephemeral=True)
 
 # Voting System
 class VotingView(View):
@@ -9216,6 +9489,30 @@ async def slash_bcadeadlines(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
+@bot.command()
+async def endimposter(ctx):
+    """End the current imposter game (mods only)"""
+    if not has_mod_or_admin(ctx):
+        await ctx.send(embed=nova_embed("eND iMPOSTER", "yOU dON'T hAVE pERMISSION!"))
+        return
+    
+    # This is a simple implementation - in a real scenario you'd track active games
+    await ctx.send(embed=nova_embed(
+        "🛑 iMPOSTER gAME eNDED",
+        "tHE cURRENT iMPOSTER gAME hAS bEEN eNDED bY a mODERATOR!"
+    ))
+
+@bot.tree.command(name="endimposter", description="End the current imposter game (mods only)")
+async def endimposter_slash(interaction: discord.Interaction):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("eND iMPOSTER", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    await interaction.response.send_message(embed=nova_embed(
+        "🛑 iMPOSTER gAME eNDED",
+        "tHE cURRENT iMPOSTER gAME hAS bEEN eNDED bY a mODERATOR!"
+    ))
+
 # BCA Category Management Slash Commands
 @bot.tree.command(name="bcaaddcategory", description="Add a BCA category (mods only)")
 @app_commands.describe(category_name="Name of the category to add")
@@ -9275,6 +9572,34 @@ async def slash_bcacategories(interaction: discord.Interaction):
         color=0xff69b4
     )
     await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="removebcacategory", description="Remove a BCA category (mods only)")
+@app_commands.describe(category_name="Name of the category to remove")
+async def slash_removebcacategory(interaction: discord.Interaction, category_name: str):
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("bCA rEMOVE cATEGORY", "yOU dON'T hAVE pERMISSION!"), ephemeral=True)
+        return
+    
+    global BCA_CATEGORIES, BCA_NOMINATIONS, BCA_VOTES
+    category_name = category_name.lower()
+    
+    if category_name not in BCA_CATEGORIES:
+        await interaction.response.send_message(embed=nova_embed("bCA rEMOVE cATEGORY", f"cATEGORY '{category_name}' dOESN'T eXIST!"), ephemeral=True)
+        return
+    
+    # Remove category from all data structures
+    del BCA_CATEGORIES[category_name]
+    if category_name in BCA_NOMINATIONS:
+        del BCA_NOMINATIONS[category_name]
+    if category_name in BCA_VOTES:
+        del BCA_VOTES[category_name]
+    
+    # Save all changes
+    save_bca_categories(BCA_CATEGORIES)
+    save_bca_nominations(BCA_NOMINATIONS)
+    save_bca_votes(BCA_VOTES)
+    
+    await interaction.response.send_message(embed=nova_embed("bCA rEMOVE cATEGORY", f"🗑️ rEMOVED cATEGORY: {category_name.title()}\n\naLL nOMINATIONS aND vOTES fOR tHIS cATEGORY hAVE bEEN dELETED!"))
 
 # BCA Reset Slash Commands
 @bot.tree.command(name="resetnominations", description="Reset nominations for a category or all categories (mods only)")
