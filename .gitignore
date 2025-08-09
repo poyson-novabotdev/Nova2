@@ -37,3 +37,4 @@ Thumbs.db # Windows
 *.log
 *.sqlite3
 *.bak
+*.json
