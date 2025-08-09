@@ -5637,8 +5637,13 @@ async def imposter(ctx):
         change_balance(imposter.id, 500)
         await ctx.send(embed=nova_embed("iMPOSTER wINS!", f"{imposter.mention} sURVIVED! tHEY gET 500 {CURRENCY_NAME}!"))
 
-@bot.tree.command(name="imposter", description="Start an imposter game and DM secret words!")
+@bot.tree.command(name="imposter", description="Start an imposter game and DM secret words (mods only)")
 async def imposter_slash(interaction: discord.Interaction):
+    # Check if user has mod or admin permissions
+    if not has_mod_or_admin_interaction(interaction):
+        await interaction.response.send_message(embed=nova_embed("iMPOSTER", "yOU dON'T hAVE pERMISSION! oNLY mODS cAN sTART iMPOSTER gAMES."), ephemeral=True)
+        return
+        
     if interaction.guild is None or interaction.channel is None:
         await interaction.response.send_message(embed=nova_embed("iMPOSTER", "tHIS cOMMAND mUST bE uSED iN a sERVER cHANNEL!"), ephemeral=True)
         return
@@ -5672,6 +5677,8 @@ async def imposter_slash(interaction: discord.Interaction):
         await channel.send(embed=nova_embed("iMPOSTER", f"cOULD nOT dM: {', '.join(failed)}"))
     await channel.send(embed=nova_embed("iMPOSTER", "aLL sECRET wORDS hAVE bEEN sENT!"))
     await interaction.followup.send(embed=nova_embed("iMPOSTER", "gAME sTARTED! cHECK yOUR dMS!"), ephemeral=True)
+
+
     
 
 @bot.command()
